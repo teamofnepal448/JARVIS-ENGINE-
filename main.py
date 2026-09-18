@@ -153,6 +153,8 @@ runtime_store  = JSONStore(DATA / "runtime_config.json", DEFAULT_RUNTIME)
 accounts_store = JSONStore(DATA / "accounts.json", {"accounts": []})
 scripts_store  = JSONStore(DATA / "scripts.json", {})
 templates_store = JSONStore(DATA / "script_templates.json", {})
+automation_store = JSONStore(DATA / "automation_templates.json", {"templates": []})
+acctcfg_store = JSONStore(DATA / "account_config.json", {})
 
 STATE    = state_store.load()
 HISTORY  = history_store.load()   # BUG FIX 5: defined before any use
@@ -800,16 +802,34 @@ def _lev(a, b):
         prev = cur
     return prev[lb]
 
-LEV_WORDS = ("channel", "channels", "cross", "folder", "folders", "monitor", "task", "status",
+LEV_WORDS = ("channel", "channels", "cross", "folder", "folders", "monitor", "task", "tasks", "status",
              "admin", "user", "message", "messages", "search", "start", "stop", "pause", "resume",
              "reset", "scheduler", "schedule", "dead", "inactive", "account", "saved", "recent",
-             "diagnostics", "help", "latest", "config", "list", "update")
+             "diagnostics", "help", "latest", "config", "list", "update",
+             # custom-script vocabulary — must never be fuzzed into something else
+             "cancel", "template", "templates", "script", "scripts", "updater", "select",
+             "main", "source", "destination", "custom", "run", "create")
+
+# Real Hindi/Hinglish/domain words that must NEVER be "corrected" into a
+# lexicon word (saare->start, result->resume, cancel->channel were real bugs).
+FUZZY_PROTECTED = {
+    "saare", "sare", "saara", "sab", "sabhi", "karo", "kar", "kro", "kardo",
+    "result", "results", "toss", "mera", "mere", "meri", "wala", "wali",
+    "bhejo", "bhej", "dikhao", "dikha", "batao", "bata", "chalu", "band",
+    "naya", "nahi", "haan", "abhi", "phir", "fir", "jitne", "apna", "apne",
+    "iska", "uska", "inka", "unka", "yeh", "woh", "kya", "kaun", "kaise",
+    "kitna", "kitne", "line", "bana", "banao", "aaye", "rakho", "rakhna",
+    "time", "data", "jaldi", "fast", "live", "auto", "promo", "news",
+    "sirf", "wale", "pehle", "baad", "minute", "ghante", "select", "cancel",
+}
 
 def fuzzy_norm(t):
-    """BUG FIX 6: spelling-tolerant lexicon ('cros'->cross, 'chanel'->channel, 'usr'->user)."""
+    """BUG FIX 6: spelling-tolerant lexicon ('cros'->cross, 'chanel'->channel, 'usr'->user).
+    Protected words and template-ish tokens are left untouched."""
     out = []
     for tok in t.split(" "):
-        if len(tok) < 3 or tok.startswith("@") or any(ch.isdigit() for ch in tok) or tok in LEV_WORDS:
+        if (len(tok) < 3 or tok.startswith("@") or any(ch.isdigit() for ch in tok)
+                or tok in LEV_WORDS or tok in FUZZY_PROTECTED or "-" in tok or "_" in tok):
             out.append(tok)
             continue
         best = min(LEV_WORDS, key=lambda w: _lev(tok, w))
@@ -940,6 +960,89 @@ def classify(raw, origin):
 
         tgt = target_of(c)
         p = extract(c, origin)
+
+        # ---- CUSTOM SCRIPT RUNNER: templates / account context (§34-§36) ----
+        # saved template names are matched first so "TOSS-CROSS start karo"
+        # runs the template, not the generic cross engine
+        _tpl_hit = None
+        _cnorm = re.sub(r"[^a-z0-9 ]+", " ", c)
+        for _t in templates_all():
+            for _cand in {str(_t.get("name", "")).lower(), str(_t.get("template_id", "")).lower()}:
+                if not _cand:
+                    continue
+                _flat = re.sub(r"[^a-z0-9 ]+", " ", _cand).strip()
+                if _flat and (_flat in _cnorm or _cand in c):
+                    _tpl_hit = _t
+                    break
+            if _tpl_hit:
+                break
+
+        m_acc = re.search(r"account\s*(\d+|[a-z0-9_]{2,})", c)
+        if m_acc and has(c, ("select", "choose", "chuno", "switch", "pe switch")):
+            plan.steps.append(Step("account_select", {"account": m_acc.group(1)})); continue
+
+        if has(c, ("main channel", "main chanel")) or (has(c, ("source", "destination")) and has(c, ("set", "lagao", "kar do", "karo")) and not has(c, ("monitor", "cross", "template", "script"))):
+            prm = {}
+            mm = re.search(r"main chann?el\s*(?:ko\s*)?(?:set\s*)?(-?\d{5,20}|@[a-z0-9_]+)", c)
+            if mm: prm["main_channel"] = mm.group(1)
+            ms = re.search(r"source\s*(?:ko\s*)?(?:set\s*)?(@[a-z0-9_]+|-?\d{5,20})", c)
+            if ms: prm["source"] = ms.group(1)
+            md = re.search(r"destination\s*(?:ko\s*)?(?:set\s*)?(@[a-z0-9_]+|-?\d{5,20})", c)
+            if md: prm["destination"] = md.group(1)
+            if m_acc and not re.fullmatch(r"\d{5,20}", m_acc.group(1)): prm["account"] = m_acc.group(1)
+            if prm:
+                plan.steps.append(Step("account_config_set", prm)); continue
+
+        if has(c, ("template banao", "template bana", "create template", "naya template",
+                   "template create", "script banao", "automation banao")):
+            nm = re.search(r"(?:name|naam)\s*[:=]?\s*([a-z0-9_\-]+)", c)
+            prm = {"text": c[:300]}
+            if nm: prm["name"] = nm.group(1)
+            if m_acc: prm["account"] = m_acc.group(1)
+            plan.steps.append(Step("template_create", prm))
+            break  # description text belongs to the template, not further clauses
+
+        if has(c, ("saved script", "saved template", "script list", "template list", "templates dikhao",
+                   "saved scripts", "mera script", "mere script", "custom script list", "scripts dikhao",
+                   "templates list")):
+            plan.steps.append(Step("template_list", {})); continue
+
+        _task_words = has(c, ("task", "tasks"))
+        if _task_words and has(c, ("cancel", "stop", "band", "rok")) and has(c, ("saare", "sab", "all", "sabhi")):
+            plan.steps.append(Step("tasks_cancel_all", {})); continue
+        if _task_words and has(c, ("dikhao", "list", "batao", "status", "chal rah", "running", "custom")):
+            plan.steps.append(Step("tasks_list", {})); continue
+
+        if _tpl_hit:
+            if has(c, V_STOP):
+                plan.steps.append(Step("template_stop", {"template": _tpl_hit["name"]})); continue
+            if has(c, V_START + ("run", "chala")):
+                prm = {"template": _tpl_hit["name"]}
+                if m_acc: prm["account"] = m_acc.group(1)
+                plan.steps.append(Step("template_run", prm)); continue
+
+        if has(c, ("template", "updater")) or (has(c, ("script",)) and has(c, ("run", "chalu", "start", "stop", "band"))):
+            _name = None
+            _m = re.search(r"(?:template|script)\s+([a-z0-9][a-z0-9_\-]{1,30})", c)
+            if _m and _m.group(1) not in ("run", "start", "stop", "list", "banao"):
+                _name = _m.group(1)
+            else:
+                _m2 = re.search(r"([a-z0-9][a-z0-9_\- ]{1,30}?)\s*(?:template|updater|script)", c)
+                if _m2:
+                    _name = _m2.group(1).strip()
+            if _name:
+                # drop leading account phrases / filler words
+                _name = re.sub(r"^(?:account\s*\d+\s*(?:ka|ke|ki|wala|wali)?\s*)", "", _name).strip()
+                _name = re.sub(r"^(?:mera|mere|meri|my|ye|is|wo|custom|saved)\s+", "", _name).strip()
+                _name = re.sub(r"\s+(?:ka|ke|ki|wala|wali)$", "", _name).strip()
+            if _name in ("custom", "saved", "mera", "mere", "my", "ye", "is", ""):
+                _name = None
+            if has(c, V_STOP):
+                plan.steps.append(Step("template_stop", {"template": _name or ""})); continue
+            if has(c, V_START + ("run", "chala")):
+                prm = {"template": _name or ""}
+                if m_acc: prm["account"] = m_acc.group(1)
+                plan.steps.append(Step("template_run", prm)); continue
 
         if p.get("run_at") and has(c, V_START) and not has(c, V_STOP):
             plan.steps.append(Step("scheduler_start", {"run_at": p["run_at"], "label": p["label"]})); continue
@@ -2193,8 +2296,10 @@ async def t_jarvis_help(p, o):
     for t in REG.tools.values():
         cats.setdefault(t.category, []).append(t)
     lines = [f"JARVIS TOOL REGISTRY — {len(REG.tools)} tools (whitelist only)", bar,
-             "Natural language: English · Hindi · Hinglish · multi-step · fuzzy spelling", bar]
-    for cat in ("TELEGRAM", "JARVIS", "SCHEDULER", "CROSS", "MONITOR", "TASK", "ADMIN"):
+             "Natural language: English · Hindi · Hinglish · multi-step · fuzzy spelling",
+             "Custom Script Runner: '/AI account 2 select karo' · '/AI <TEMPLATE> run karo' · "
+             "'/AI saved script list dikhao' · '/AI running tasks dikhao'", bar]
+    for cat in ("TELEGRAM", "JARVIS", "ACCOUNT", "CUSTOM", "SCHEDULER", "CROSS", "MONITOR", "TASK", "ADMIN"):
         tools = cats.get(cat, [])
         if not tools:
             continue
@@ -2264,6 +2369,270 @@ REG.register("admin_promote", "User ko channel admin banao", "ADMIN", t_admin_pr
              params=[ToolParam("channel", "chat"), ToolParam("user", "user")])
 REG.register("admin_demote", "User se admin rights hatao", "ADMIN", t_admin_demote, confirm=True, sensitive=True,
              params=[ToolParam("channel", "chat"), ToolParam("user", "user")])
+
+# ---------------- custom automation templates (account-bound) ----------------
+def _ctx_account(o):
+    """Resolve the account bound to this conversation/session."""
+    aid = ctx_get(o).get("account_id")
+    if aid and aid in ACCOUNTS.accounts:
+        return ACCOUNTS.accounts[aid], aid
+    active = ACCOUNTS.get_active()
+    if active:
+        return active, active["meta"]["id"]
+    return None, None
+
+def _resolve_account_ref(ref):
+    """'2' / 'account 2' / '@user' / 'acc_xxx' / label -> (acc, acc_id)."""
+    ref = str(ref or "").strip().lower().lstrip("@")
+    items = list(ACCOUNTS.accounts.items())
+    if not ref:
+        return None, None
+    m = re.fullmatch(r"(?:account\s*)?(\d+)", ref)
+    if m:
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(items):
+            return items[idx][1], items[idx][0]
+        return None, None
+    for aid, acc in items:
+        meta = acc["meta"]
+        if aid.lower() == ref or str(meta.get("username", "")).lower() == ref \
+                or str(meta.get("label", "")).lower() == ref or str(meta.get("user_id")) == ref:
+            return acc, aid
+    for aid, acc in items:
+        if ref in str(acc["meta"].get("label", "")).lower() or ref in str(acc["meta"].get("username", "")).lower():
+            return acc, aid
+    return None, None
+
+async def t_account_select(p, o):
+    acc, aid = _resolve_account_ref(p.get("account"))
+    if not acc:
+        listing = [f"  ▸ {i+1}. {a['meta'].get('label')} (@{a['meta'].get('username')})"
+                   for i, a in enumerate(ACCOUNTS.accounts.values())]
+        return {"ok": False, "lines": [f"ACCOUNT NOT FOUND ▸ '{p.get('account')}'", "Available:"] + (listing or ["  (none added)"])}
+    ctx_set(o, account_id=aid)
+    cfg = acct_cfg(aid)
+    return {"lines": ["ACCOUNT SELECTED", bar, f"@{acc['meta'].get('username')} ({acc['meta'].get('label')})",
+                      f"Account ID   ▸ {aid}",
+                      f"Main channel ▸ {cfg.get('main_channel') or 'not set'}",
+                      f"Source       ▸ {cfg.get('source') or 'not set'}",
+                      f"Destination  ▸ {cfg.get('destination') or 'not set'}",
+                      "Ab is account ke context me commands chalenge."]}
+
+async def t_account_config_set(p, o):
+    acc, aid = _ctx_account(o)
+    if p.get("account"):
+        acc2, aid2 = _resolve_account_ref(p.get("account"))
+        if acc2:
+            acc, aid = acc2, aid2
+    if not acc:
+        return {"ok": False, "lines": ["Pehle account select karo — '/AI account 2 select karo'"]}
+    store = acctcfg_store.load()
+    cfg = store.get(aid, {})
+    changed = []
+    for key in ("main_channel", "source", "destination"):
+        if p.get(key) not in (None, ""):
+            cfg[key] = p.get(key)
+            changed.append(f"{key} = {p.get(key)}")
+    if not changed:
+        return {"ok": False, "lines": ["Kya set karna hai? main_channel / source / destination batao"]}
+    cfg["updated_at"] = int(time.time())
+    store[aid] = cfg
+    await acctcfg_store.save(store)
+    safe_log("CMD", "ACCOUNT", f"config updated for {aid}: {', '.join(changed)}")
+    return {"lines": ["ACCOUNT CONFIG UPDATED", bar,
+                      f"Account ▸ @{acc['meta'].get('username')}"] + [f"{c}" for c in changed]}
+
+async def t_template_list(p, o):
+    acc, aid = _ctx_account(o)
+    only = p.get("account_scope", True)
+    items = templates_all()
+    if only and aid:
+        items = [t for t in items if t.get("account_id") == aid]
+    lines = ["CUSTOM TEMPLATES" + (f" — @{acc['meta'].get('username')}" if acc and only else ""), bar]
+    if not items:
+        lines.append("Koi template nahi. Web panel me automation likh ke SAVE TEMPLATE karo.")
+    for t in items[:12]:
+        owner = ACCOUNTS.accounts.get(t.get("account_id"))
+        running = AUTO_BY_TEMPLATE.get(t["template_id"])
+        lines += [f"▸ {t['name']} [{t['template_id']}]",
+                  f"   Account ▸ @{(owner or {}).get('meta', {}).get('username', '?')} · "
+                  f"{'ENABLED' if t.get('enabled') else 'DISABLED'}"
+                  f"{' · RUNNING ' + running if running else ''}",
+                  f"   Last run ▸ {fmt_kt(t['last_run']) if t.get('last_run') else 'never'} · {t.get('last_result') or '—'}"]
+    lines.append(f"Total: {len(items)}")
+    return {"lines": lines}
+
+async def t_template_run(p, o):
+    acc, aid = _ctx_account(o)
+    if p.get("account"):
+        acc2, aid2 = _resolve_account_ref(p.get("account"))
+        if acc2:
+            acc, aid = acc2, aid2
+            ctx_set(o, account_id=aid)
+    ref = str(p.get("template", "")).strip()
+    tpl = (template_find(ref, aid) or template_find(ref)) if ref else None
+    if not tpl and not ref:
+        # no name given — run the account's only enabled template, else ask
+        cands = [t for t in templates_all() if t.get("account_id") == aid and t.get("enabled", True)]
+        if len(cands) == 1:
+            tpl = cands[0]
+        elif len(cands) > 1:
+            return {"ok": False, "lines": ["KAUNSA TEMPLATE? is account ke templates:"] +
+                                          [f"  ▸ {t['name']} [{t['template_id']}]" for t in cands]}
+    if not tpl:
+        return {"ok": False, "lines": [f"TEMPLATE NOT FOUND ▸ '{ref or '(none given)'}'",
+                                       "'/AI saved script list dikhao' se dekho"]}
+    if not tpl.get("enabled", True):
+        return {"ok": False, "lines": [f"TEMPLATE DISABLED ▸ {tpl['name']} — pehle enable karo"]}
+    owner_id = tpl.get("account_id")
+    if aid and owner_id and owner_id != aid:
+        owner = ACCOUNTS.accounts.get(owner_id)
+        return {"ok": False, "lines": [
+            f"ACCOUNT MISMATCH ▸ template '{tpl['name']}' account @{(owner or {}).get('meta', {}).get('username', '?')} ka hai",
+            "Cross-account execution allowed nahi — pehle us account ko select karo"]}
+    run_acc_id = owner_id or aid
+    if not run_acc_id or run_acc_id not in ACCOUNTS.accounts:
+        return {"ok": False, "lines": ["Template ka account available nahi — account add/activate karo"]}
+    if AUTO_BY_TEMPLATE.get(tpl["template_id"]):
+        return {"ok": False, "lines": [f"ALREADY RUNNING ▸ task {AUTO_BY_TEMPLATE[tpl['template_id']]} — pehle stop karo"]}
+    defn, err = parse_automation(tpl.get("code", ""))
+    if err:
+        return {"ok": False, "lines": ["TEMPLATE INVALID", bar, err,
+                                       "Code/configuration correction required (healing script edit nahi karti)."]}
+    ok, payload = await run_automation(run_acc_id, defn, tpl, origin=o)
+    if not ok:
+        v = payload.get("validation") or {}
+        return {"ok": False, "lines": ["VALIDATION FAILED — script NOT run", bar] +
+                                      [("  ✓ " if c["ok"] else "  ✗ ") + c["label"] + (f" — {c['detail']}" if c["detail"] else "")
+                                       for c in v.get("checks", [])]}
+    owner = ACCOUNTS.accounts.get(run_acc_id)
+    return {"lines": ["CUSTOM TEMPLATE STARTED", bar,
+                      f"Template ▸ {tpl['name']}",
+                      f"Account  ▸ @{owner['meta'].get('username')}",
+                      f"Task     ▸ {payload['task_id']}",
+                      "Status   ▸ RUNNING",
+                      "Live logs web panel me aur '/AI running tasks dikhao' se."]}
+
+async def t_template_stop(p, o):
+    ref = str(p.get("template", "")).strip()
+    acc, aid = _ctx_account(o)
+    task_id = None
+    if ref:
+        tpl = template_find(ref, aid) or template_find(ref)
+        if tpl:
+            task_id = AUTO_BY_TEMPLATE.get(tpl["template_id"])
+            if not task_id:
+                return {"ok": False, "lines": [f"'{tpl['name']}' abhi run nahi ho raha"]}
+        elif ref.upper() in AUTO_TASKS:
+            task_id = ref.upper()
+    if not task_id:
+        running = [t for t in AUTO_TASKS.values() if t["status"] == "RUNNING"
+                   and (not aid or t["account_id"] == aid)]
+        if len(running) == 1:
+            task_id = running[0]["task_id"]
+        elif len(running) > 1:
+            return {"ok": False, "lines": ["Multiple custom tasks chal rahe hain — naam/id batao:"] +
+                                          [f"  ▸ {t['task_id']} {t['name']} (@{t['account']})" for t in running]}
+        else:
+            return {"ok": False, "lines": ["Koi custom task run nahi ho raha"]}
+    ok, status = await stop_automation(task_id, "jarvis")
+    t = AUTO_TASKS.get(task_id, {})
+    return {"lines": ["CUSTOM TASK STOPPED", bar, f"Task     ▸ {task_id}",
+                      f"Template ▸ {t.get('name')}", f"Account  ▸ @{t.get('account')}",
+                      f"Status   ▸ {status}"]}
+
+async def t_tasks_list(p, o):
+    acc, aid = _ctx_account(o)
+    rows = [t for t in AUTO_TASKS.values() if not aid or t["account_id"] == aid]
+    lines = ["CUSTOM SCRIPT TASKS" + (f" — @{acc['meta'].get('username')}" if acc else ""), bar]
+    if not rows:
+        lines.append("Koi custom task nahi.")
+    for t in rows[-10:]:
+        lines += [f"[{t['task_id']}] {t['name']} ▸ {t['status']} ({t.get('progress', 0)}%)",
+                  f"   account @{t.get('account')} · template {t.get('template_id')}" +
+                  (f" · reason: {t['reason']}" if t.get("reason") else "")]
+    eng_tasks = [x for x in TASKS.running() if x["kind"] != "CUSTOM"]
+    if eng_tasks:
+        lines.append(bar)
+        for x in eng_tasks:
+            lines.append(f"[{x['id']}] {x['label']} ▸ {x['status']}")
+    return {"lines": lines}
+
+async def t_tasks_cancel_all(p, o):
+    acc, aid = _ctx_account(o)
+    running = [t for t in AUTO_TASKS.values() if t["status"] == "RUNNING" and (not aid or t["account_id"] == aid)]
+    for t in running:
+        await stop_automation(t["task_id"], "cancel-all")
+    extra = []
+    for x in list(TASKS.running()):
+        if x["kind"] != "CUSTOM":
+            await TASKS.stop(x["id"])
+            extra.append(x["id"])
+    return {"lines": ["ALL TASKS CANCELLED", bar,
+                      f"Custom tasks ▸ {len(running)} stopped" + (f" ({', '.join(t['task_id'] for t in running)})" if running else ""),
+                      f"Engine/monitor tasks ▸ {len(extra)} stopped" if extra else "Engine/monitor tasks ▸ none"]}
+
+async def t_template_create(p, o):
+    """§35 — JARVIS drafts a template from natural language, shows a summary."""
+    acc, aid = _ctx_account(o)
+    if p.get("account"):
+        acc2, aid2 = _resolve_account_ref(p.get("account"))
+        if acc2:
+            acc, aid = acc2, aid2
+    if not acc:
+        return {"ok": False, "lines": ["Pehle account select karo — '/AI account 2 select karo'"]}
+    text = str(p.get("text", "")).lower()
+    cfg = acct_cfg(aid)
+    actions = []
+    if any(k in text for k in ("monitor", "nazar", "watch", "source")):
+        actions.append({"action": "START_MONITOR", "params": {}})
+    if any(k in text for k in ("copy", "result", "update", "bhejo", "send", "publish")) and not actions:
+        actions += [{"action": "COPY_SOURCE_TEXT", "params": {}},
+                    {"action": "FORMAT_TEXT", "params": {}},
+                    {"action": "SEND_MESSAGE", "params": {}}]
+    if any(k in text for k in ("cross",)):
+        actions.append({"action": "START_CROSS", "params": {}})
+    if not actions:
+        return {"ok": False, "lines": [
+            "Is description se koi approved action map nahi hua.",
+            "Supported: monitor / copy+format+send / cross / schedule.",
+            "Example: '/AI ek template banao: source monitor karo aur destination par update bhejo'"]}
+    name = (p.get("name") or "AUTO-" + uuid.uuid4().hex[:4]).upper()
+    code_lines = [f"name: {name}"] + [a["action"] for a in actions]
+    defn = {"name": name, "actions": actions}
+    v = validate_automation(defn, aid)
+    tid = await template_save({"name": name, "account_id": aid, "description": str(p.get("text", ""))[:200],
+                               "code": "\n".join(code_lines), "actions": actions,
+                               "configuration": {}, "enabled": True})
+    lines = ["TEMPLATE DRAFTED & SAVED", bar,
+             f"Name     ▸ {name} [{tid}]",
+             f"Account  ▸ @{acc['meta'].get('username')} (bound)",
+             f"Actions  ▸ " + " → ".join(a["action"] for a in actions),
+             f"Source   ▸ {cfg.get('source') or 'NOT SET'} · Destination ▸ {cfg.get('destination') or 'NOT SET'}",
+             bar, "VALIDATION:"]
+    lines += [("  ✓ " if c["ok"] else "  ✗ ") + c["label"] + (f" — {c['detail']}" if c["detail"] else "")
+              for c in v["checks"]]
+    lines.append(bar)
+    lines.append("Review karke run karo: '/AI " + name + " run karo'" if v["ok"]
+                 else "Pehle missing config set karo, phir run karo — abhi run nahi kiya.")
+    return {"lines": lines}
+
+REG.register("account_select", "Select the working Telegram account", "ACCOUNT", t_account_select,
+             needs_telegram=False, params=[ToolParam("account", "text", True)])
+REG.register("account_config_set", "Set main channel / source / destination for the account", "ACCOUNT",
+             t_account_config_set, needs_telegram=False,
+             params=[ToolParam("account", "text"), ToolParam("main_channel", "chat"),
+                     ToolParam("source", "chat"), ToolParam("destination", "chat")])
+REG.register("template_list", "List saved custom automation templates", "CUSTOM", t_template_list, needs_telegram=False)
+REG.register("template_run", "Run a saved custom template on its bound account", "CUSTOM", t_template_run,
+             needs_telegram=False,  # validates the TEMPLATE'S account client, not the global one
+             params=[ToolParam("template", "text"), ToolParam("account", "text")])
+REG.register("template_stop", "Stop a running custom template/task", "CUSTOM", t_template_stop, needs_telegram=False,
+             params=[ToolParam("template", "text")])
+REG.register("template_create", "Draft + save a custom template from natural language", "CUSTOM", t_template_create,
+             needs_telegram=False, params=[ToolParam("text", "text"), ToolParam("name", "text"), ToolParam("account", "text")])
+REG.register("tasks_list", "List custom script tasks for the account", "CUSTOM", t_tasks_list, needs_telegram=False)
+REG.register("tasks_cancel_all", "Cancel all running tasks", "CUSTOM", t_tasks_cancel_all, needs_telegram=False, confirm=True)
 
 REG.register("jarvis_help", "Commands/tools help", "JARVIS", t_jarvis_help, needs_telegram=False)
 REG.register("jarvis_status", "Full system status", "JARVIS", t_jarvis_status, needs_telegram=False)
@@ -3168,6 +3537,592 @@ async def stop_all_scripts(reason="shutdown"):
 async def stop_scripts_for_account(acc_id, reason="account removed"):
     if acc_id in SCRIPT_TASKS or acc_id in SCRIPT_PROGRESS:
         await stop_script(acc_id, reason)
+    # account-bound automation tasks must die with their account (§40)
+    for tid, t in list(globals().get("AUTO_TASKS", {}).items()):
+        if t.get("account_id") == acc_id and t.get("status") == "RUNNING":
+            try:
+                await stop_automation(tid, reason)
+            except Exception as e:
+                log.warning("stop automation %s failed: %s", tid, type(e).__name__)
+
+# ============================================================================
+# CUSTOM SCRIPT RUNNER v3 — ACCOUNT-BOUND DECLARATIVE AUTOMATION  (§27-§42)
+#
+#   LAYER 1  JARVIS natural language  -> validated intent
+#   LAYER 2  action registry / templates -> only approved operations
+#   LAYER 3  the SELECTED account's Telegram client -> real result
+#
+#   The editor is an automation DEFINITION (JSON or line DSL), never Python.
+#   No exec/eval/imports/shell/filesystem/credential access is reachable here.
+#   Every task carries account_id + template_id + task_id, and so does every
+#   log line — Account A can never run on Account B's session.
+# ============================================================================
+
+AUTO_LOGS = {}          # task_id -> deque of log rows
+AUTO_TASKS = {}         # task_id -> runtime record
+AUTO_BY_TEMPLATE = {}   # template_id -> task_id (one active run per template)
+ACCOUNT_MONITORS = {}   # acc_id -> {"handler":fn, "conf":{...}, "processed":int}
+
+def auto_log(task, level, msg):
+    row = {"ts": time.time(), "level": str(level)[:5], "msg": _scrub(msg)[:400],
+           "account_id": task.get("account_id"), "template_id": task.get("template_id"),
+           "task_id": task.get("task_id")}
+    AUTO_LOGS.setdefault(task["task_id"], deque(maxlen=400)).append(row)
+    acc = task.get("account_id")
+    if acc:
+        ScriptLogger.put(acc, level, f"[{task['task_id']}] {msg}")
+
+def acct_cfg(acc_id):
+    cfg = acctcfg_store.load().get(acc_id, {})
+    return {"main_channel": cfg.get("main_channel"), "source": cfg.get("source"),
+            "destination": cfg.get("destination"), "keywords": cfg.get("keywords") or DEFAULT_KEYWORDS}
+
+async def _resolve_for(client, ref):
+    ref = str(ref).strip().lstrip("@")
+    return await client.get_entity(int(ref) if ref.lstrip("-").isdigit() else ref)
+
+# ---------------------------------------------------------------------------
+# ACTION REGISTRY (§31) — the only operations an automation may perform
+# ---------------------------------------------------------------------------
+async def a_get_account_info(ctx, p):
+    me = await ctx["client"].get_me()
+    ctx["vars"]["account"] = getattr(me, "username", None) or str(me.id)
+    return f"account @{ctx['vars']['account']} (id {me.id})"
+
+async def a_get_folders(ctx, p):
+    folders = await _scan_folders_client(ctx["client"])
+    ctx["vars"]["folders"] = len(folders)
+    return f"{len(folders)} folder(s), {sum(len(f['channels']) for f in folders)} channels"
+
+async def a_get_channel_info(ctx, p):
+    ref = p.get("chat") or ctx["conf"].get("main_channel")
+    e = await _resolve_for(ctx["client"], ref)
+    ctx["vars"]["channel"] = getattr(e, "title", str(ref))
+    return f"{getattr(e, 'title', ref)} ▸ id {e.id} ▸ @{getattr(e, 'username', None) or 'private'}"
+
+async def a_get_recent_messages(ctx, p):
+    ref = p.get("chat") or ctx["conf"].get("source") or ctx["conf"].get("main_channel")
+    limit = min(int(p.get("limit", 5)), 20)
+    e = await _resolve_for(ctx["client"], ref)
+    out = []
+    async for m in ctx["client"].iter_messages(e, limit=limit):
+        if m and (m.text or ""):
+            out.append(m.text[:70])
+    ctx["vars"]["recent"] = out
+    return f"{len(out)} recent message(s) from {ref}"
+
+async def a_read_message(ctx, p):
+    ref = p.get("chat") or ctx["conf"].get("source")
+    e = await _resolve_for(ctx["client"], ref)
+    ids = p.get("message_id")
+    msgs = await ctx["client"].get_messages(e, ids=[int(ids)] if ids else None, limit=None if ids else 1)
+    msg = (msgs[0] if isinstance(msgs, list) else msgs)
+    if not msg:
+        raise RuntimeError(f"message not found in {ref}")
+    ctx["vars"]["text"] = msg.text or ""
+    return f"read message {msg.id} ({len(ctx['vars']['text'])} chars)"
+
+async def a_search_message(ctx, p):
+    q = str(p.get("query", ""))[:60]
+    if not q:
+        raise RuntimeError("SEARCH_MESSAGE needs query=")
+    ref = p.get("chat") or "me"
+    e = await _resolve_for(ctx["client"], ref) if ref != "me" else "me"
+    hits = []
+    async for m in ctx["client"].iter_messages(e, search=q, limit=5):
+        if m.text:
+            hits.append(m.text[:70])
+    ctx["vars"]["hits"] = hits
+    return f"{len(hits)} match(es) for '{q}'"
+
+async def a_check_permissions(ctx, p):
+    ref = p.get("chat") or ctx["conf"].get("destination") or ctx["conf"].get("main_channel")
+    e = await _resolve_for(ctx["client"], ref)
+    perms = await ctx["client"].get_permissions(e, "me")
+    role = "CREATOR" if perms.is_creator else ("ADMIN" if perms.is_admin else "MEMBER")
+    ctx["vars"]["role"] = role
+    return f"{ref} ▸ role {role}"
+
+async def a_copy_source_text(ctx, p):
+    ref = p.get("source") or ctx["conf"].get("source")
+    e = await _resolve_for(ctx["client"], ref)
+    msgs = await ctx["client"].get_messages(e, limit=1)
+    if not msgs or not msgs[0] or not (msgs[0].text or ""):
+        raise RuntimeError(f"no readable text in source {ref} (Telegram returned nothing)")
+    parsed = parse_source_text(msgs[0].text, p.get("keywords") or ctx["conf"].get("keywords"))
+    ctx["vars"]["text"] = parsed["body"]
+    return f"copied {len(parsed['body'])} chars ({'keyword match' if parsed['matched'] else 'full text'})"
+
+async def a_format_text(ctx, p):
+    body = ctx["vars"].get("text", "")
+    if not body:
+        raise RuntimeError("FORMAT_TEXT needs text — run COPY_SOURCE_TEXT or READ_MESSAGE first")
+    tpl = p.get("template")
+    if tpl:
+        ctx["vars"]["text"] = str(tpl).replace("{body}", body).replace(
+            "{time}", ktm_now().strftime("%d %b %I:%M %p NPT"))[:3800]
+    else:
+        ctx["vars"]["text"] = format_update_text(body)
+    return f"formatted ({len(ctx['vars']['text'])} chars)"
+
+async def a_send_message(ctx, p):
+    ref = p.get("destination") or p.get("chat") or ctx["conf"].get("destination")
+    text = p.get("text") or ctx["vars"].get("text")
+    if not text:
+        raise RuntimeError("SEND_MESSAGE needs text= or a previous COPY_SOURCE_TEXT/FORMAT_TEXT")
+    e = await _resolve_for(ctx["client"], ref)
+    try:
+        sent = await ctx["client"].send_message(e, str(text)[:3800])
+    except FloodWaitError as fw:
+        auto_log(ctx["task"], "WARN", f"FloodWait {fw.seconds}s — waiting exact duration (no bypass)")
+        await asyncio.sleep(fw.seconds)
+        sent = await ctx["client"].send_message(e, str(text)[:3800])
+    return f"sent to {ref} (msg {sent.id})"
+
+async def a_start_monitor(ctx, p):
+    acc_id = ctx["account_id"]
+    conf = ctx["conf"]
+    src = p.get("source") or conf.get("source")
+    dst = p.get("destination") or conf.get("destination")
+    kws = p.get("keywords") or conf.get("keywords")
+    client = ctx["client"]
+    src_e = await _resolve_for(client, src)
+    await _resolve_for(client, dst)
+    if acc_id in ACCOUNT_MONITORS:
+        await a_stop_monitor(ctx, {})
+    latest = await client.get_messages(src_e, limit=1)
+    state = {"last_id": latest[0].id if latest and latest[0] else 0, "processed": 0,
+             "src": src, "dst": dst, "kws": kws, "task_id": ctx["task"]["task_id"]}
+    task_ref = ctx["task"]
+
+    @client.on(events.NewMessage())
+    async def _mon(event):
+        try:
+            ent = event.chat
+            ref = str(src).lstrip("@").lstrip("-100").lstrip("-")
+            if str(getattr(ent, "id", "")) != ref and getattr(ent, "username", None) != ref:
+                return
+            m = event.message
+            if not m or not getattr(m, "text", None) or m.id <= state["last_id"]:
+                return
+            state["last_id"] = m.id
+            auto_log(task_ref, "INFO", f"NEW MESSAGE RECEIVED (id {m.id})")
+            parsed = parse_source_text(m.text, state["kws"])
+            auto_log(task_ref, "INFO", "MESSAGE PROCESSED")
+            await client.send_message(await _resolve_for(client, dst), format_update_text(parsed["body"]))
+            state["processed"] += 1
+            auto_log(task_ref, "OK", f"UPDATE SENT -> {dst}")
+        except FloodWaitError as fw:
+            auto_log(task_ref, "WARN", f"FloodWait {fw.seconds}s — exact delay honoured")
+            await asyncio.sleep(fw.seconds)
+        except Exception as e:
+            auto_log(task_ref, "ERROR", f"monitor step failed: {type(e).__name__}: {str(e)[:120]}")
+
+    ACCOUNT_MONITORS[acc_id] = {"handler": _mon, "state": state, "client": client}
+    ctx["task"]["keep_alive"] = True
+    return f"monitor started {src} -> {dst} (event-based, baseline {state['last_id']})"
+
+async def a_stop_monitor(ctx, p):
+    acc_id = ctx["account_id"]
+    mon = ACCOUNT_MONITORS.pop(acc_id, None)
+    if not mon:
+        return "no monitor running for this account"
+    try:
+        mon["client"].remove_event_handler(mon["handler"])
+    except Exception:
+        pass
+    return f"monitor stopped ({mon['state']['processed']} updates processed)"
+
+def _require_active(ctx):
+    active = ACCOUNTS.get_active()
+    aid = active["meta"]["id"] if active else None
+    if aid != ctx["account_id"]:
+        raise RuntimeError("cross engine runs on the ACTIVE account only — activate this account first "
+                           "(Accounts panel) to avoid cross-account execution")
+
+async def a_start_cross(ctx, p):
+    _require_active(ctx)
+    r = await ENGINE.start()
+    if not r.get("ok", True):
+        raise RuntimeError((r.get("lines") or ["cross start failed"])[0])
+    return (r.get("lines") or ["cross started"])[0]
+
+async def a_stop_cross(ctx, p):
+    _require_active(ctx)
+    return (ENGINE.stop().get("lines") or ["stopped"])[0]
+
+async def a_pause_cross(ctx, p):
+    _require_active(ctx)
+    return ((await ENGINE.pause()).get("lines") or ["paused"])[0]
+
+async def a_resume_cross(ctx, p):
+    _require_active(ctx)
+    return ((await ENGINE.resume()).get("lines") or ["resumed"])[0]
+
+async def a_schedule_task(ctx, p):
+    what = str(p.get("action", "START")).upper()
+    if what not in ("START", "STOP"):
+        raise RuntimeError("SCHEDULE_TASK action= must be START or STOP")
+    when = p.get("run_at") or p.get("in")
+    if when is None:
+        raise RuntimeError("SCHEDULE_TASK needs run_at=<epoch> or in=<seconds>")
+    run_at = float(when) if float(when) > 1e6 else time.time() + float(when)
+    j = SCHED.add(what, run_at, str(p.get("label", "automation")))
+    return f"job [{j['id']}] {what} at {fmt_kt(run_at)}"
+
+async def a_cancel_task(ctx, p):
+    jid = str(p.get("id", ""))
+    if jid and SCHED.cancel(jid):
+        return f"job [{jid}] cancelled"
+    tid = str(p.get("task_id", ""))
+    if tid and tid in AUTO_TASKS:
+        AUTO_TASKS[tid]["stopped"] = True
+        return f"task {tid} cancel requested"
+    raise RuntimeError(f"nothing to cancel for id '{jid or tid}'")
+
+ACTION_REGISTRY = {
+    "READ_MESSAGE":        {"fn": a_read_message,        "params": ["chat", "message_id"], "needs": [],            "desc": "Read a message from an accessible chat"},
+    "SEARCH_MESSAGE":      {"fn": a_search_message,      "params": ["chat", "query"],      "needs": [],            "desc": "Search readable messages"},
+    "GET_CHANNEL_INFO":    {"fn": a_get_channel_info,    "params": ["chat"],               "needs": ["main_channel_or_chat"], "desc": "Channel title/id/username"},
+    "GET_RECENT_MESSAGES": {"fn": a_get_recent_messages, "params": ["chat", "limit"],      "needs": [],            "desc": "Recent messages from a chat"},
+    "GET_FOLDERS":         {"fn": a_get_folders,         "params": [],                     "needs": [],            "desc": "Dialog folders of this account"},
+    "GET_ACCOUNT_INFO":    {"fn": a_get_account_info,    "params": [],                     "needs": [],            "desc": "Authenticated account identity"},
+    "CHECK_PERMISSIONS":   {"fn": a_check_permissions,   "params": ["chat"],               "needs": [],            "desc": "Own role/rights in a channel"},
+    "COPY_SOURCE_TEXT":    {"fn": a_copy_source_text,    "params": ["source", "keywords"], "needs": ["source"],    "desc": "Copy exact latest source text"},
+    "FORMAT_TEXT":         {"fn": a_format_text,         "params": ["template"],           "needs": [],            "desc": "Format copied text via template"},
+    "SEND_MESSAGE":        {"fn": a_send_message,        "params": ["destination", "text"],"needs": ["destination"], "desc": "Publish to destination"},
+    "START_MONITOR":       {"fn": a_start_monitor,       "params": ["source", "destination", "keywords"], "needs": ["source", "destination"], "desc": "Event-based source monitor (account-scoped)"},
+    "STOP_MONITOR":        {"fn": a_stop_monitor,        "params": [],                     "needs": [],            "desc": "Stop this account's monitor"},
+    "START_CROSS":         {"fn": a_start_cross,         "params": [],                     "needs": ["active_account"], "desc": "Start cross engine"},
+    "STOP_CROSS":          {"fn": a_stop_cross,          "params": [],                     "needs": ["active_account"], "desc": "Stop cross engine"},
+    "PAUSE_CROSS":         {"fn": a_pause_cross,         "params": [],                     "needs": ["active_account"], "desc": "Pause cross engine"},
+    "RESUME_CROSS":        {"fn": a_resume_cross,        "params": [],                     "needs": ["active_account"], "desc": "Resume cross engine"},
+    "SCHEDULE_TASK":       {"fn": a_schedule_task,       "params": ["action", "run_at", "in", "label"], "needs": [], "desc": "Schedule START/STOP (Asia/Kathmandu)"},
+    "CANCEL_TASK":         {"fn": a_cancel_task,         "params": ["id", "task_id"],      "needs": [],            "desc": "Cancel a scheduled job / running task"},
+}
+
+# ---------------------------------------------------------------------------
+# PARSER — JSON definition or simple line DSL (never Python)
+# ---------------------------------------------------------------------------
+def _coerce(v):
+    v = v.strip()
+    if v.lower() in ("true", "false"):
+        return v.lower() == "true"
+    if re.fullmatch(r"-?\d+", v):
+        return int(v)
+    if "," in v and not v.startswith('"'):
+        return [x.strip() for x in v.split(",") if x.strip()]
+    return v.strip('"\'')
+
+def parse_automation(text):
+    """Return (definition, error). Accepts JSON object or line DSL."""
+    raw = (text or "").strip()
+    if not raw:
+        return None, "Automation is empty"
+    if len(raw) > 20000:
+        return None, "Automation too long (max 20000 chars)"
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+        except Exception as e:
+            return None, f"Invalid JSON: {str(e)[:120]}"
+        if not isinstance(obj, dict):
+            return None, "JSON root must be an object"
+        acts = obj.get("actions") or []
+        if not isinstance(acts, list):
+            return None, "'actions' must be a list"
+        norm = []
+        for i, a in enumerate(acts, 1):
+            if isinstance(a, str):
+                norm.append({"action": a.strip().upper(), "params": {}})
+            elif isinstance(a, dict):
+                name = str(a.get("action", "")).strip().upper()
+                prm = a.get("params") if isinstance(a.get("params"), dict) else {}
+                norm.append({"action": name, "params": prm})
+            else:
+                return None, f"action #{i} must be a string or object"
+        obj["actions"] = norm
+        return obj, None
+    # line DSL:  ACTION key=value key2=value2     (# comments allowed)
+    actions, meta = [], {}
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^(name|description|schedule)\s*:\s*(.+)$", line, re.I)
+        if m:
+            meta[m.group(1).lower()] = m.group(2).strip()
+            continue
+        parts = line.split()
+        name = parts[0].upper()
+        prm = {}
+        for kv in parts[1:]:
+            if "=" not in kv:
+                return None, f"line {lineno}: '{kv}' must be key=value"
+            k, v = kv.split("=", 1)
+            prm[k.strip()] = _coerce(v)
+        actions.append({"action": name, "params": prm})
+    if not actions:
+        return None, "No actions found — add at least one action line"
+    return {**meta, "actions": actions}, None
+
+# ---------------------------------------------------------------------------
+# VALIDATOR (§30) — never run when a check fails
+# ---------------------------------------------------------------------------
+def validate_automation(defn, account_id):
+    checks, errors = [], []
+
+    def add(ok, label, detail=""):
+        checks.append({"ok": bool(ok), "label": label, "detail": detail})
+        if not ok:
+            errors.append(f"{label}{(' — ' + detail) if detail else ''}")
+
+    acc = ACCOUNTS.accounts.get(account_id) if account_id else None
+    add(bool(acc), "Account selected", "" if acc else "choose a Telegram account first")
+    if acc:
+        authed = bool(acc.get("authorized") and acc.get("client") and acc["client"].is_connected())
+        add(authed, "Account authorized",
+            f"@{acc['meta'].get('username')}" if authed else "session not connected — activate/re-add the account")
+    else:
+        add(False, "Account authorized", "no account")
+
+    add(bool(defn), "Script structure valid", "" if defn else "definition could not be parsed")
+    acts = (defn or {}).get("actions") or []
+    add(bool(acts), "Actions present", f"{len(acts)} action(s)" if acts else "no actions defined")
+
+    unknown = [a["action"] for a in acts if a["action"] not in ACTION_REGISTRY]
+    add(not unknown, "Allowed actions",
+        "all approved" if not unknown else "unsupported: " + ", ".join(sorted(set(unknown))[:4]))
+
+    bad_params = []
+    for a in acts:
+        spec = ACTION_REGISTRY.get(a["action"])
+        if not spec:
+            continue
+        for k in (a.get("params") or {}):
+            if k not in spec["params"]:
+                bad_params.append(f"{a['action']}.{k}")
+    add(not bad_params, "Parameters valid",
+        "ok" if not bad_params else "unknown: " + ", ".join(bad_params[:4]))
+
+    cfg = acct_cfg(account_id) if account_id else {}
+    conf = {**cfg, **((defn or {}).get("configuration") or {})}
+    needs = set()
+    for a in acts:
+        spec = ACTION_REGISTRY.get(a["action"])
+        if spec:
+            for n in spec["needs"]:
+                if n == "source" and (a.get("params") or {}).get("source"):
+                    continue
+                if n == "destination" and (a.get("params") or {}).get("destination"):
+                    continue
+                if n == "main_channel_or_chat" and (a.get("params") or {}).get("chat"):
+                    continue
+                needs.add(n)
+    if "source" in needs:
+        add(bool(conf.get("source")), "Source configured", conf.get("source") or "set source for this account")
+    if "destination" in needs:
+        add(bool(conf.get("destination")), "Destination configured", conf.get("destination") or "set destination for this account")
+    if "main_channel_or_chat" in needs:
+        add(bool(conf.get("main_channel")), "Main channel configured", str(conf.get("main_channel") or "set main channel or pass chat="))
+    if "active_account" in needs:
+        active = ACCOUNTS.get_active()
+        is_active = bool(active and active["meta"]["id"] == account_id)
+        add(is_active, "Account is ACTIVE (cross engine)",
+            "active" if is_active else "cross actions require this account to be the active one")
+    if not needs:
+        add(True, "Required configuration available", "no extra config needed")
+
+    return {"ok": not errors, "checks": checks, "errors": errors,
+            "action_count": len(acts), "config": conf}
+
+# ---------------------------------------------------------------------------
+# TEMPLATE STORE (§29, §37, §40)
+# ---------------------------------------------------------------------------
+def templates_all():
+    return automation_store.load().get("templates", [])
+
+def template_get(tid):
+    return next((t for t in templates_all() if t["template_id"] == tid), None)
+
+def template_find(name_or_id, account_id=None):
+    q = str(name_or_id or "").strip().lower().replace(" ", "-")
+    cands = [t for t in templates_all() if not account_id or t.get("account_id") == account_id]
+    for t in cands:
+        if t["template_id"].lower() == q or t["name"].lower().replace(" ", "-") == q:
+            return t
+    for t in cands:
+        if q and q in t["name"].lower().replace(" ", "-"):
+            return t
+    return None
+
+async def template_save(data):
+    items = templates_all()
+    tid = data.get("template_id")
+    now = int(time.time())
+    if tid:
+        for i, t in enumerate(items):
+            if t["template_id"] == tid:
+                items[i] = {**t, **data, "updated_at": now}
+                break
+        else:
+            tid = None
+    if not tid:
+        tid = "tpl_" + uuid.uuid4().hex[:6]
+        items.append({"template_id": tid, "name": data.get("name") or "UNNAMED",
+                      "account_id": data.get("account_id"), "description": data.get("description", ""),
+                      "code": data.get("code", ""), "configuration": data.get("configuration") or {},
+                      "actions": data.get("actions") or [], "conditions": data.get("conditions") or {},
+                      "schedule": data.get("schedule"), "enabled": bool(data.get("enabled", True)),
+                      "last_run": None, "last_result": None,
+                      "created_at": now, "updated_at": now})
+    await automation_store.save({"templates": items})
+    return tid
+
+async def template_patch(tid, **fields):
+    items = templates_all()
+    for i, t in enumerate(items):
+        if t["template_id"] == tid:
+            items[i] = {**t, **fields, "updated_at": int(time.time())}
+            await automation_store.save({"templates": items})
+            return items[i]
+    return None
+
+async def template_delete(tid):
+    items = [t for t in templates_all() if t["template_id"] != tid]
+    await automation_store.save({"templates": items})
+
+# ---------------------------------------------------------------------------
+# RUNNER (§28, §31, §32, §40) — strictly account-bound
+# ---------------------------------------------------------------------------
+async def run_automation(account_id, defn, template=None, origin="web"):
+    acc = ACCOUNTS.accounts.get(account_id)
+    v = validate_automation(defn, account_id)
+    if not v["ok"]:
+        return False, {"error": "VALIDATION FAILED — " + "; ".join(v["errors"][:3]), "validation": v}
+
+    tpl_id = (template or {}).get("template_id", "inline")
+    task_id = "CUSTOM-" + uuid.uuid4().hex[:4].upper()
+    task = {"task_id": task_id, "template_id": tpl_id, "account_id": account_id,
+            "account": acc["meta"].get("username"), "name": (template or {}).get("name") or defn.get("name") or "inline",
+            "status": "RUNNING", "progress": 0, "started_at": time.time(),
+            "stopped": False, "keep_alive": False, "reason": None}
+    AUTO_TASKS[task_id] = task
+    AUTO_BY_TEMPLATE[tpl_id] = task_id
+
+    auto_log(task, "INFO", "TASK CREATED")
+    auto_log(task, "INFO", f"ACCOUNT @{acc['meta'].get('username')} (id {account_id})")
+    auto_log(task, "OK", "TELEGRAM SESSION VERIFIED")
+
+    ctx = {"client": acc["client"], "account_id": account_id, "task": task,
+           "conf": v["config"], "vars": {}}
+    actions = defn.get("actions") or []
+
+    async def _runner():
+        try:
+            for i, a in enumerate(actions, 1):
+                if task["stopped"]:
+                    task["status"] = "CANCELLED"
+                    auto_log(task, "WARN", "TASK CANCELLED by operator")
+                    break
+                spec = ACTION_REGISTRY[a["action"]]
+                auto_log(task, "INFO", f"ACTION {i}/{len(actions)} {a['action']}")
+                try:
+                    detail = await spec["fn"](ctx, a.get("params") or {})
+                    auto_log(task, "OK", f"{a['action']} ▸ {detail}")
+                except FloodWaitError as fw:
+                    auto_log(task, "WARN", f"FloodWait {fw.seconds}s — waiting exact duration")
+                    await asyncio.sleep(fw.seconds)
+                    detail = await spec["fn"](ctx, a.get("params") or {})
+                    auto_log(task, "OK", f"{a['action']} ▸ {detail}")
+                task["progress"] = int(i / max(1, len(actions)) * 100)
+            else:
+                if task.get("keep_alive"):
+                    task["status"] = "RUNNING"
+                    task["progress"] = 100
+                    auto_log(task, "OK", "TASK RUNNING (listening — Stop to end)")
+                    while not task["stopped"] and account_id in ACCOUNT_MONITORS:
+                        await asyncio.sleep(0.5)
+                    if account_id in ACCOUNT_MONITORS:
+                        await a_stop_monitor(ctx, {})
+                    task["status"] = "CANCELLED" if task["stopped"] else "COMPLETED"
+                    auto_log(task, "OK", f"TASK {task['status']}")
+                else:
+                    task["status"] = "COMPLETED"
+                    task["progress"] = 100
+                    auto_log(task, "OK", "TASK COMPLETED")
+        except asyncio.CancelledError:
+            task["status"] = "CANCELLED"
+            auto_log(task, "WARN", "TASK CANCELLED")
+            raise
+        except Exception as e:
+            task["status"] = "FAILED"
+            task["reason"] = f"{type(e).__name__}: {str(e)[:180]}"
+            auto_log(task, "ERROR", f"TASK FAILED ▸ {task['reason']}")
+        finally:
+            task["finished_at"] = time.time()
+            if template:
+                await template_patch(tpl_id, last_run=int(time.time()),
+                                     last_result=f"{task['status']}" + (f" — {task['reason']}" if task.get("reason") else ""))
+            if AUTO_BY_TEMPLATE.get(tpl_id) == task_id and task["status"] != "RUNNING":
+                AUTO_BY_TEMPLATE.pop(tpl_id, None)
+            TASKS.set_status(task_id, task["status"])
+
+    TASKS.register("CUSTOM", f"{task['name']} @{task['account']}",
+                   stop_fn=lambda: stop_automation(task_id), fixed_id=task_id)
+    task["_task"] = asyncio.get_running_loop().create_task(_runner())
+    safe_log("CMD", "AUTOMATION", f"{task_id} started ▸ template {tpl_id} ▸ account {account_id}")
+    return True, {"task_id": task_id, "status": task["status"], "template_id": tpl_id,
+                  "account_id": account_id, "validation": v}
+
+async def stop_automation(task_id, reason="operator"):
+    task = AUTO_TASKS.get(task_id)
+    if not task:
+        return False, "Task not found"
+    task["stopped"] = True
+    acc_id = task.get("account_id")
+    if acc_id in ACCOUNT_MONITORS:
+        mon = ACCOUNT_MONITORS.pop(acc_id, None)
+        if mon:
+            try:
+                mon["client"].remove_event_handler(mon["handler"])
+            except Exception:
+                pass
+    t = task.get("_task")
+    if t and not t.done():
+        t.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(t, return_exceptions=True), 5.0)
+        except Exception:
+            pass
+    if task["status"] == "RUNNING":
+        task["status"] = "CANCELLED"
+    TASKS.set_status(task_id, task["status"])
+    auto_log(task, "WARN", f"STOP requested ({reason})")
+    return True, task["status"]
+
+def automation_task_view(t):
+    return {"task_id": t["task_id"], "template_id": t.get("template_id"), "name": t.get("name"),
+            "account_id": t.get("account_id"), "account": t.get("account"),
+            "status": t.get("status"), "progress": t.get("progress", 0),
+            "started_at": t.get("started_at"), "reason": t.get("reason")}
+
+def automation_heal():
+    """§39 — bounded recovery of runtime state only; never edits templates."""
+    healed = []
+    for tid, t in list(AUTO_TASKS.items()):
+        task_obj = t.get("_task")
+        if t["status"] == "RUNNING" and task_obj is not None and task_obj.done():
+            t["status"] = "FAILED" if not t.get("reason") else t["status"]
+            t["reason"] = t.get("reason") or "runtime task vanished — state rebuilt by healing"
+            AUTO_BY_TEMPLATE.pop(t.get("template_id"), None)
+            healed.append(f"{tid}: stale task state rebuilt")
+    for acc_id, mon in list(ACCOUNT_MONITORS.items()):
+        acc = ACCOUNTS.accounts.get(acc_id)
+        if not acc or not acc.get("client") or not acc["client"].is_connected():
+            ACCOUNT_MONITORS.pop(acc_id, None)
+            healed.append(f"{acc_id}: monitor dropped (client disconnected)")
+    return healed
 
 # ============================================================================
 # Diagnostics / Scheduler
@@ -3662,6 +4617,204 @@ async def api_scripts_logs_clear():
     ScriptLogger.clear(str(body.get("account_id", "")))
     return jsonify({"ok": True})
 
+# ---- custom script runner: account-bound automation templates --------------
+@app.route("/api/automation/actions", methods=["GET"])
+@require_token
+async def api_auto_actions():
+    return jsonify({"ok": True, "actions": [
+        {"name": k, "desc": v["desc"], "params": v["params"], "needs": v["needs"]}
+        for k, v in ACTION_REGISTRY.items()]})
+
+@app.route("/api/automation/validate", methods=["POST"])
+@require_token
+async def api_auto_validate():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    defn, err = parse_automation(str(body.get("code", "")))
+    if err:
+        return jsonify({"ok": False, "error": err,
+                        "checks": [{"ok": bool(acc_id and acc_id in ACCOUNTS.accounts), "label": "Account selected", "detail": ""},
+                                   {"ok": False, "label": "Script structure valid", "detail": err}]})
+    v = validate_automation(defn, acc_id)
+    return jsonify({"ok": v["ok"], "checks": v["checks"], "errors": v["errors"],
+                    "action_count": v["action_count"]})
+
+@app.route("/api/automation/templates", methods=["GET"])
+@require_token
+async def api_auto_templates():
+    acc_id = str(request.args.get("account_id", ""))
+    items = templates_all()
+    if acc_id:
+        items = [t for t in items if t.get("account_id") == acc_id]
+    out = []
+    for t in items:
+        owner = ACCOUNTS.accounts.get(t.get("account_id"))
+        out.append({**{k: t.get(k) for k in ("template_id", "name", "account_id", "description",
+                                             "code", "enabled", "schedule", "last_run", "last_result",
+                                             "created_at", "updated_at")},
+                    "account": (owner or {}).get("meta", {}).get("username"),
+                    "running_task": AUTO_BY_TEMPLATE.get(t["template_id"])})
+    return jsonify({"ok": True, "templates": out})
+
+@app.route("/api/automation/templates/save", methods=["POST"])
+@require_token
+async def api_auto_tpl_save():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    if acc_id not in ACCOUNTS.accounts:
+        return jsonify({"ok": False, "error": "Select a valid account first (templates are account-bound)"}), 400
+    code = str(body.get("code", ""))
+    defn, err = parse_automation(code)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    v = validate_automation(defn, acc_id)
+    unknown = [c for c in v["checks"] if not c["ok"] and c["label"] in ("Allowed actions", "Parameters valid")]
+    if unknown:
+        return jsonify({"ok": False, "error": unknown[0]["label"] + " — " + unknown[0]["detail"]}), 400
+    tid = await template_save({"template_id": body.get("template_id"),
+                               "name": str(body.get("name", "")).strip()[:40] or "UNNAMED",
+                               "account_id": acc_id, "description": str(body.get("description", ""))[:200],
+                               "code": code, "actions": defn.get("actions") or [],
+                               "configuration": defn.get("configuration") or {},
+                               "conditions": defn.get("conditions") or {},
+                               "schedule": defn.get("schedule"),
+                               "enabled": bool(body.get("enabled", True))})
+    safe_log("CMD", "AUTOMATION", f"template {tid} saved for {acc_id}")
+    return jsonify({"ok": True, "template_id": tid, "validation": v})
+
+@app.route("/api/automation/templates/delete", methods=["POST"])
+@require_token
+async def api_auto_tpl_delete():
+    body = await request.get_json(silent=True) or {}
+    tid = str(body.get("template_id", ""))
+    if not template_get(tid):
+        return jsonify({"ok": False, "error": "Template not found"}), 404
+    if AUTO_BY_TEMPLATE.get(tid):
+        return jsonify({"ok": False, "error": "Template is running — stop it first"}), 400
+    await template_delete(tid)
+    return jsonify({"ok": True})
+
+@app.route("/api/automation/templates/duplicate", methods=["POST"])
+@require_token
+async def api_auto_tpl_dup():
+    body = await request.get_json(silent=True) or {}
+    t = template_get(str(body.get("template_id", "")))
+    if not t:
+        return jsonify({"ok": False, "error": "Template not found"}), 404
+    tid = await template_save({"name": (t["name"] + "-COPY")[:40], "account_id": t.get("account_id"),
+                               "description": t.get("description", ""), "code": t.get("code", ""),
+                               "actions": t.get("actions") or [], "configuration": t.get("configuration") or {},
+                               "enabled": False})
+    return jsonify({"ok": True, "template_id": tid})
+
+@app.route("/api/automation/templates/toggle", methods=["POST"])
+@require_token
+async def api_auto_tpl_toggle():
+    body = await request.get_json(silent=True) or {}
+    tid = str(body.get("template_id", ""))
+    if not template_get(tid):
+        return jsonify({"ok": False, "error": "Template not found"}), 404
+    t = await template_patch(tid, enabled=bool(body.get("enabled", True)))
+    return jsonify({"ok": True, "enabled": t["enabled"]})
+
+@app.route("/api/automation/run", methods=["POST"])
+@require_token
+async def api_auto_run():
+    body = await request.get_json(silent=True) or {}
+    tid = str(body.get("template_id", "")).strip()
+    tpl = template_get(tid) if tid else None
+    if tpl:
+        acc_id = tpl.get("account_id")
+        if not tpl.get("enabled", True):
+            return jsonify({"ok": False, "error": "Template is DISABLED — enable it first"}), 400
+        if AUTO_BY_TEMPLATE.get(tid):
+            return jsonify({"ok": False, "error": f"Already running (task {AUTO_BY_TEMPLATE[tid]})"}), 400
+        code = tpl.get("code", "")
+    else:
+        acc_id = str(body.get("account_id", ""))
+        code = str(body.get("code", ""))
+    if acc_id not in ACCOUNTS.accounts:
+        return jsonify({"ok": False, "error": "Account not found — select a valid account"}), 400
+    defn, err = parse_automation(code)
+    if err:
+        return jsonify({"ok": False, "error": "TEMPLATE INVALID — " + err}), 400
+    ok, payload = await run_automation(acc_id, defn, tpl, origin=caller_origin())
+    if not ok:
+        return jsonify({"ok": False, **payload}), 400
+    return jsonify({"ok": True, **payload})
+
+@app.route("/api/automation/stop", methods=["POST"])
+@require_token
+async def api_auto_stop():
+    body = await request.get_json(silent=True) or {}
+    tid = str(body.get("task_id", "")) or AUTO_BY_TEMPLATE.get(str(body.get("template_id", "")), "")
+    if not tid or tid not in AUTO_TASKS:
+        return jsonify({"ok": False, "error": "No running task for that template/id"}), 400
+    ok, status = await stop_automation(tid, "web")
+    return jsonify({"ok": ok, "status": status})
+
+@app.route("/api/automation/tasks", methods=["GET"])
+@require_token
+async def api_auto_tasks():
+    acc_id = str(request.args.get("account_id", ""))
+    rows = [automation_task_view(t) for t in AUTO_TASKS.values()
+            if not acc_id or t["account_id"] == acc_id]
+    return jsonify({"ok": True, "tasks": rows[-20:]})
+
+@app.route("/api/automation/logs", methods=["GET"])
+@require_token
+async def api_auto_logs():
+    tid = str(request.args.get("task_id", ""))
+    if not tid:
+        tpl = str(request.args.get("template_id", ""))
+        tid = AUTO_BY_TEMPLATE.get(tpl, "")
+        if not tid:
+            cands = [t for t in AUTO_TASKS.values() if t.get("template_id") == tpl]
+            tid = cands[-1]["task_id"] if cands else ""
+    task = AUTO_TASKS.get(tid)
+    return jsonify({"ok": True, "task_id": tid,
+                    "task": automation_task_view(task) if task else None,
+                    "logs": list(AUTO_LOGS.get(tid, []))[-200:]})
+
+@app.route("/api/automation/heal", methods=["POST"])
+@require_token
+async def api_auto_heal():
+    healed = automation_heal()
+    for acc_id, acc in ACCOUNTS.accounts.items():
+        c = acc.get("client")
+        if c and not c.is_connected():
+            try:
+                await c.connect()
+                healed.append(f"{acc_id}: telegram client reconnected")
+            except Exception as e:
+                healed.append(f"{acc_id}: reconnect failed ({type(e).__name__})")
+    return jsonify({"ok": True, "healed": healed,
+                    "message": "runtime state only — template source never modified"})
+
+@app.route("/api/account/config", methods=["GET", "POST"])
+@require_token
+async def api_account_config():
+    if request.method == "GET":
+        acc_id = str(request.args.get("account_id", ""))
+        return jsonify({"ok": True, "config": acct_cfg(acc_id) if acc_id else {}})
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    if acc_id not in ACCOUNTS.accounts:
+        return jsonify({"ok": False, "error": "Account not found"}), 400
+    store = acctcfg_store.load()
+    cfg = store.get(acc_id, {})
+    for k in ("main_channel", "source", "destination"):
+        if k in body:
+            cfg[k] = str(body[k]).strip() or None
+    if "keywords" in body:
+        v = body["keywords"]
+        cfg["keywords"] = [x.strip() for x in v.split(",")] if isinstance(v, str) else list(v or [])
+    cfg["updated_at"] = int(time.time())
+    store[acc_id] = cfg
+    await acctcfg_store.save(store)
+    safe_log("CMD", "ACCOUNT", f"config saved for {acc_id}")
+    return jsonify({"ok": True, "config": acct_cfg(acc_id)})
+
 @app.errorhandler(404)
 async def not_found(_e):
     return jsonify({"ok": False, "error": "Not found"}), 404
@@ -3703,6 +4856,9 @@ async def shutdown():
     try:
         ENGINE.eng["status"] = "stopped"
         state_store.save_bg(STATE)
+        for _tid, _t in list(AUTO_TASKS.items()):
+            if _t.get("status") == "RUNNING":
+                await stop_automation(_tid, "shutdown")
         await stop_all_scripts("shutdown")
         await TG.disconnect(clear=False)
         for acc in ACCOUNTS.accounts.values():

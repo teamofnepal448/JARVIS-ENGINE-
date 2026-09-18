@@ -284,6 +284,27 @@ textarea.code.lined:focus{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
 .sc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 @media(max-width:560px){.sc-grid2{grid-template-columns:1fr}}
 .warn-line{margin-bottom:9px}
+/* ---------- automation mode (account-bound custom script runner) ---------- */
+.vrow{display:flex;gap:8px;align-items:flex-start;font-family:var(--mono);font-size:9.5px;padding:2px 0}
+.vrow b{flex:none;width:14px;font-weight:700}
+.vrow.okv b{color:#6ee7b7}.vrow.okv span{color:#94a3b8}
+.vrow.nov b{color:#fda4af}.vrow.nov span{color:#fda4af}
+.vbox{border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.4);border-radius:3px;padding:9px 11px}
+.vbox.pass{border-color:rgba(52,211,153,.35)}
+.vbox.fail{border-color:rgba(244,63,94,.4)}
+.runcard{border:1px solid rgba(34,211,238,.28);background:rgba(34,211,238,.05);border-radius:3px;padding:10px 12px;font-family:var(--mono);font-size:10px;line-height:1.7}
+.runcard .kv2{display:flex;justify-content:space-between;gap:10px}
+.runcard .kv2 span{color:#475569}.runcard .kv2 b{color:#e0f2fe;font-weight:600}
+.runcard.done{border-color:rgba(52,211,153,.4)}
+.runcard.fail{border-color:rgba(244,63,94,.45)}
+.pbar{height:4px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:7px}
+.pbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--cy-dim),var(--cy));transition:width .5s}
+.tplrow{border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.32);border-radius:3px;padding:8px 10px;margin-bottom:6px}
+.tplrow .t1{display:flex;align-items:center;gap:8px}
+.tplrow .nm{font-family:var(--mono);font-size:10.5px;font-weight:700;color:#e2e8f0}
+.tplrow .meta2{font-family:var(--mono);font-size:8.5px;color:#475569;margin-top:2px}
+.tplops{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+.tplops .mini{padding:3px 7px;font-size:8.5px}
 
 /* ---------- lock veil / offline / toasts ---------- */
 .veil{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(2,6,16,.82);backdrop-filter:blur(3px);border-radius:4px;text-align:center;padding:16px}
@@ -494,6 +515,19 @@ textarea.code.lined:focus{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
             <input id="cf-mdst" placeholder="@outputchannel" autocomplete="off"/></label>
           <label class="field"><span><span class="lb">Dead Threshold (days)</span></span>
             <input id="cf-thresh" inputmode="numeric" placeholder="30" autocomplete="off"/></label>
+          <div style="border-top:1px solid rgba(255,255,255,.06);margin:4px 0 10px;padding-top:10px">
+            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:7px">
+              PER-ACCOUNT (used by Custom Script Runner)</p>
+            <label class="field"><span><span class="lb">Account</span><span class="hint">binds the values below</span></span>
+              <select class="sel" id="ac-account"><option value="">— select account —</option></select></label>
+            <label class="field"><span><span class="lb">Main Channel</span></span>
+              <input id="ac-main" placeholder="1716302260" autocomplete="off"/></label>
+            <label class="field"><span><span class="lb">Source</span></span>
+              <input id="ac-src" placeholder="@sourcechannel" autocomplete="off"/></label>
+            <label class="field"><span><span class="lb">Destination</span></span>
+              <input id="ac-dst" placeholder="@outputchannel" autocomplete="off"/></label>
+            <button class="btn ghost" id="btn-ac-save">Save Account Config</button>
+          </div>
           <div id="cf-err" class="err-box hidden" style="margin-bottom:10px"></div>
           <button class="btn" id="btn-cf-save">Save Configuration</button>
           <p class="cfgstatus" id="cf-status">Priority: JSON config &gt; ENV &gt; default · applies instantly — no redeploy</p>
@@ -590,10 +624,16 @@ textarea.code.lined:focus{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
             <div class="mode-seg">
               <button class="seg on-safe" id="btn-mode-safe">SAFE MODE</button>
               <button class="seg" id="btn-mode-raw">RAW MODE</button>
+              <button class="seg" id="btn-mode-auto">AUTOMATION</button>
             </div>
           </div>
         </div>
         <div class="p-body" style="display:flex;flex-direction:column;gap:10px">
+          <div id="sc-autoinfo" class="ok-box warn-line hidden">
+            ✓ Account-bound automation — no Python runs. Only approved ACTIONS execute through the
+            Tool Registry against the <b>selected account's</b> Telegram client. Every task carries
+            account_id + template_id + task_id.
+          </div>
           <div id="sc-rawwarn" class="warn-box warn-line hidden">
             ⚠️ Raw code execution. Only use trusted code. Server crash risk if buggy.
             Code ko install karne se pehle review karo — ye aapke REPONSIBILITY hai.
@@ -622,14 +662,30 @@ main()"></textarea>
           </div>
 
           <div>
-            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:6px">ALLOWED GLOBALS</p>
+            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:6px" id="sc-globals-label">ALLOWED GLOBALS</p>
             <div style="display:flex;flex-wrap:wrap;gap:5px" id="sc-globals"></div>
           </div>
 
+          <!-- automation-only: validation result + run status (§27,§30,§32) -->
+          <div id="sc-valid" class="hidden"></div>
+          <div id="sc-runcard" class="runcard hidden"></div>
+
           <div class="btnrow">
+            <button class="btn ghost hidden" id="btn-sc-validate">Validate</button>
             <button class="btn" id="btn-sc-install" style="box-shadow:0 0 22px -6px rgba(34,211,238,.7)">Install &amp; Run</button>
             <button class="btn ghost" id="btn-sc-save">Save Template</button>
             <button class="btn danger" id="btn-sc-stop" disabled>Stop Script</button>
+          </div>
+
+          <!-- automation-only: saved templates (§37) -->
+          <div id="sc-tplbox" class="hidden">
+            <div class="term-toolbar" style="margin-bottom:6px">
+              <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">CUSTOM TEMPLATES</span>
+              <span style="margin-left:auto"></span>
+              <button class="mini" id="btn-tpl-refresh">Refresh</button>
+              <button class="mini" id="btn-tpl-heal" title="Recover runtime state only — never edits your template">Heal</button>
+            </div>
+            <div id="tpl-list"></div>
           </div>
 
           <div class="term-toolbar">
@@ -1373,12 +1429,16 @@ async function loadAccounts() {
     }).join('');
     $('accs-list').querySelectorAll('[data-act]').forEach(b => b.onclick = () => activateAccount(b.dataset.act));
     $('accs-list').querySelectorAll('[data-delid]').forEach(b => twoStep(b, 'Remove', () => removeAccount(b.dataset.delid)));
-    const sel = $('sc-account');
-    const cur = sel.value;
-    sel.innerHTML = list.length
+    const opts = list.length
       ? list.map(a => '<option value="' + esc(a.id) + '">' + esc(a.label) + ' (@' + esc(a.username || '?') + ')</option>').join('')
       : '<option value="">— select account —</option>';
-    if (cur) sel.value = cur;
+    ['sc-account', 'ac-account'].forEach(sid => {
+      const sel = $(sid); if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = opts;
+      if (cur) sel.value = cur;
+    });
+    if (SC.mode === 'automation') loadTemplates();
   } catch (e) { if (e.status === 401) setAuth(false); }
 }
 
@@ -1541,15 +1601,33 @@ function scApplyTemplate(key){
 $('sc-tpl').onchange=()=>scApplyTemplate($('sc-tpl').value);
 $('btn-sc-loadtpl').onclick=()=>scApplyTemplate($('sc-tpl').value);
 
+const AUTO_GLOBALS=['READ_MESSAGE','SEARCH_MESSAGE','GET_CHANNEL_INFO','GET_RECENT_MESSAGES','GET_FOLDERS',
+  'GET_ACCOUNT_INFO','CHECK_PERMISSIONS','COPY_SOURCE_TEXT','FORMAT_TEXT','SEND_MESSAGE','START_MONITOR',
+  'STOP_MONITOR','START_CROSS','STOP_CROSS','PAUSE_CROSS','RESUME_CROSS','SCHEDULE_TASK','CANCEL_TASK'];
+const CODE_GLOBALS=['client','SESSION_STRING','PHONE','events','errors','utils','types','asyncio','log','print','sleep','os','re','time'];
+
 function setMode(m){
   SC.mode=m;
+  const auto = m==='automation';
   $('btn-mode-safe').classList.toggle('on-safe', m==='safe');
-  $('btn-mode-safe').classList.toggle('on-raw', false);
   $('btn-mode-raw').classList.toggle('on-raw', m==='raw');
+  $('btn-mode-auto').classList.toggle('on-safe', auto);
   $('sc-rawwarn').classList.toggle('hidden', m!=='raw');
+  $('sc-autoinfo').classList.toggle('hidden', !auto);
+  // automation-only controls
+  $('btn-sc-validate').classList.toggle('hidden', !auto);
+  $('sc-tplbox').classList.toggle('hidden', !auto);
+  $('btn-sc-install').textContent = auto ? 'Run' : 'Install & Run';
+  $('btn-sc-stop').textContent = auto ? 'Stop' : 'Stop Script';
+  $('btn-sc-save').textContent = 'Save Template';
+  $('sc-globals-label').textContent = auto ? 'ALLOWED ACTIONS (tool registry)' : 'ALLOWED GLOBALS';
+  $('sc-globals').innerHTML = (auto?AUTO_GLOBALS:CODE_GLOBALS).map(c=>'<span class="gchip">'+esc(c)+'</span>').join('');
+  if(!auto){ $('sc-valid').classList.add('hidden'); $('sc-runcard').classList.add('hidden'); }
+  if(auto){ loadTemplates(); }
 }
 $('btn-mode-safe').onclick=()=>setMode('safe');
 $('btn-mode-raw').onclick=()=>{ setMode('raw'); toast('err','Raw mode: trusted code only'); };
+$('btn-mode-auto').onclick=()=>{ setMode('automation'); toast('info','Automation mode — approved actions only, account-bound'); };
 
 async function loadScript(accId){
   SC.cur='';
@@ -1566,12 +1644,13 @@ async function loadScript(accId){
     if(SC.running) scStartPoll(accId); else scStopPoll();
   }catch(e){}
 }
-$('sc-account').onchange=()=>loadScript($('sc-account').value);
+$('sc-account').onchange=()=>{ AU.editing=null; loadScript($('sc-account').value); if(SC.mode==='automation') loadTemplates(); };
 
 $('btn-sc-install').onclick=()=>{
   if(!S.auth) return toast('err','Unlock JARVIS access first');
   const accId=$('sc-account').value;
   if(!accId) return toast('err','Pehle ek managed account select karo');
+  if(SC.mode==='automation') return autoRun();
   const btn=$('btn-sc-install');
   if(btn.dataset.armed!=='1'){
     btn.dataset.armed='1';
@@ -1592,6 +1671,7 @@ function scErr(msg){ const el=$('sc-err'); if(!msg){el.classList.add('hidden');r
 
 $('btn-sc-save').onclick=async()=>{
   if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(SC.mode==='automation') return autoSaveTemplate();
   const label=$('sc-name').value.trim()||'User Script';
   try{
     await api('/api/scripts/templates/save',{method:'POST',auth:true,body:{label,code:$('sc-code').value}});
@@ -1602,6 +1682,7 @@ $('btn-sc-save').onclick=async()=>{
 
 $('btn-sc-stop').onclick=async()=>{
   if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(SC.mode==='automation') return autoStop();
   const accId=$('sc-account').value;
   const b=$('btn-sc-stop'); b.disabled=true; b.textContent='Stopping…';
   try{
@@ -1624,6 +1705,225 @@ $('btn-sc-pause').onclick=()=>{
 };
 
 scButtons();
+
+/* ---------------- AUTOMATION MODE — account-bound custom script runner ---------------- */
+const AU = {task:null, poll:null, templates:[], editing:null};
+
+function vRow(ok, label, detail){
+  return '<div class="vrow '+(ok?'okv':'nov')+'"><b>'+(ok?'✓':'✗')+'</b><span>'+esc(label)+
+    (detail?' — '+esc(detail):'')+'</span></div>';
+}
+function showValidation(res){
+  const box=$('sc-valid');
+  box.classList.remove('hidden');
+  const checks=res.checks||[];
+  const pass=!!res.ok;
+  box.innerHTML='<div class="vbox '+(pass?'pass':'fail')+'">'+
+    '<p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;color:#475569;margin-bottom:5px">VALIDATION RESULT</p>'+
+    (checks.length?checks.map(c=>vRow(c.ok,c.label,c.detail)).join(''):vRow(false,'Script structure valid',res.error||'unknown'))+
+    '<p style="font-family:var(--mono);font-size:9px;margin-top:6px;color:'+(pass?'#6ee7b7':'#fda4af')+'">'+
+    (pass?'READY TO RUN':'BLOCKED — fix the ✗ items; nothing was executed')+'</p></div>';
+}
+
+async function autoValidate(silent){
+  const accId=$('sc-account').value;
+  if(!accId){ toast('err','Select an account first'); return null; }
+  try{
+    const r=await api('/api/automation/validate',{method:'POST',auth:true,
+      body:{account_id:accId, code:$('sc-code').value}});
+    showValidation(r);
+    if(!silent) toast(r.ok?'ok':'err', r.ok?'Validation passed':'Validation failed');
+    return r;
+  }catch(e){ scErr(e.message); return null; }
+}
+$('btn-sc-validate').onclick=()=>autoValidate(false);
+
+async function autoSaveTemplate(){
+  const accId=$('sc-account').value;
+  if(!accId) return toast('err','Select an account — templates are account-bound');
+  const name=$('sc-name').value.trim();
+  if(!name) return toast('err','Template name daalo');
+  try{
+    const r=await api('/api/automation/templates/save',{method:'POST',auth:true,body:{
+      template_id:AU.editing, account_id:accId, name, code:$('sc-code').value}});
+    AU.editing=r.template_id;
+    scErr(null);
+    if(r.validation) showValidation(r.validation);
+    toast('ok','Template saved: '+name);
+    loadTemplates();
+  }catch(e){ scErr(e.message); toast('err','Save failed'); }
+}
+
+async function autoRun(){
+  const accId=$('sc-account').value;
+  const btn=$('btn-sc-install');
+  if(btn.dataset.armed!=='1'){
+    btn.dataset.armed='1'; btn.textContent='Sure?';
+    setTimeout(()=>{ if(btn.dataset.armed==='1'){ delete btn.dataset.armed; btn.textContent='Run'; } },3000);
+    return;
+  }
+  delete btn.dataset.armed; btn.textContent='Run'; btn.disabled=true;
+  scErr(null);
+  const v=await autoValidate(true);
+  if(!v || !v.ok){ btn.disabled=false; toast('err','Validation failed — not run'); return; }
+  try{
+    const body = AU.editing ? {template_id:AU.editing} : {account_id:accId, code:$('sc-code').value};
+    const r=await api('/api/automation/run',{method:'POST',auth:true,body});
+    AU.task=r.task_id;
+    toast('ok','Task '+r.task_id+' started');
+    autoPollStart();
+  }catch(e){ scErr(e.message); toast('err','Run failed'); }
+  finally{ btn.disabled=false; }
+}
+
+async function autoStop(){
+  if(!AU.task) return toast('err','No running task');
+  const b=$('btn-sc-stop'); b.disabled=true;
+  try{
+    await api('/api/automation/stop',{method:'POST',auth:true,body:{task_id:AU.task}});
+    toast('ok','Task stopped');
+    autoPoll();
+  }catch(e){ scErr(e.message); }
+  finally{ b.disabled=false; }
+}
+
+function renderRunCard(t){
+  const card=$('sc-runcard');
+  if(!t){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  card.className='runcard'+(t.status==='COMPLETED'?' done':(t.status==='FAILED'?' fail':''));
+  const col = t.status==='RUNNING' ? '#67e8f9' : t.status==='COMPLETED' ? '#6ee7b7'
+            : t.status==='FAILED' ? '#fda4af' : '#fcd34d';
+  card.innerHTML='<p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;color:#475569;margin-bottom:5px">CUSTOM SCRIPT</p>'+
+    '<div class="kv2"><span>Template</span><b>'+esc(t.name||'—')+'</b></div>'+
+    '<div class="kv2"><span>Account</span><b>@'+esc(t.account||'—')+'</b></div>'+
+    '<div class="kv2"><span>Task</span><b>'+esc(t.task_id)+'</b></div>'+
+    '<div class="kv2"><span>Status</span><b style="color:'+col+'">'+esc(t.status)+'</b></div>'+
+    '<div class="kv2"><span>Progress</span><b>'+(t.progress||0)+'%</b></div>'+
+    (t.reason?'<div class="kv2"><span>Reason</span><b style="color:#fda4af">'+esc(t.reason)+'</b></div>':'')+
+    '<div class="pbar"><i style="width:'+(t.progress||0)+'%"></i></div>';
+  $('btn-sc-stop').disabled = !(t.status==='RUNNING');
+}
+
+async function autoPoll(){
+  if(!AU.task) return;
+  try{
+    const r=await api('/api/automation/logs?task_id='+encodeURIComponent(AU.task),{auth:true});
+    renderRunCard(r.task);
+    scTerm((r.logs||[]).map(l=>({ts:l.ts,level:l.level,msg:l.msg})), true);
+    if(r.task && r.task.status!=='RUNNING'){ autoPollStop(); loadTemplates(); }
+  }catch(e){}
+}
+function autoPollStart(){ autoPollStop(); autoPoll(); AU.poll=setInterval(()=>{ if(!document.hidden) autoPoll(); },2000); }
+function autoPollStop(){ if(AU.poll){ clearInterval(AU.poll); AU.poll=null; } }
+
+async function loadTemplates(){
+  if(!S.auth) return;
+  try{
+    const accId=$('sc-account').value;
+    const r=await api('/api/automation/templates'+(accId?('?account_id='+encodeURIComponent(accId)):''),{auth:true});
+    AU.templates=r.templates||[];
+    const el=$('tpl-list');
+    if(!AU.templates.length){
+      el.innerHTML='<p class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:9px">No templates for this account — write actions above and SAVE TEMPLATE.</p>';
+      return;
+    }
+    el.innerHTML=AU.templates.map(t=>{
+      const run=!!t.running_task;
+      return '<div class="tplrow"><div class="t1">'+
+        '<span class="dot '+(run?'ok':'dim')+'"></span><span class="nm">'+esc(t.name)+'</span>'+
+        '<span class="badge '+(t.enabled?'act':'idle')+'">'+(t.enabled?'ENABLED':'DISABLED')+'</span>'+
+        (run?'<span class="run-badge">'+esc(t.running_task)+'</span>':'')+'</div>'+
+        '<p class="meta2">@'+esc(t.account||'?')+' · '+esc(t.template_id)+' · last: '+
+        (t.last_run?new Date(t.last_run*1000).toLocaleString('en-GB',{timeZone:'Asia/Kathmandu'}):'never')+
+        (t.last_result?(' · '+esc(t.last_result)):'')+'</p>'+
+        '<div class="tplops">'+
+        '<button class="mini" data-trun="'+esc(t.template_id)+'">Run</button>'+
+        '<button class="mini" data-tstop="'+esc(t.template_id)+'">Stop</button>'+
+        '<button class="mini" data-tedit="'+esc(t.template_id)+'">Edit</button>'+
+        '<button class="mini" data-tdup="'+esc(t.template_id)+'">Duplicate</button>'+
+        '<button class="mini" data-ttog="'+esc(t.template_id)+'">'+(t.enabled?'Disable':'Enable')+'</button>'+
+        '<button class="mini" data-tlogs="'+esc(t.template_id)+'">Logs</button>'+
+        '<button class="mini red" data-tdel="'+esc(t.template_id)+'">Delete</button>'+
+        '</div></div>';
+    }).join('');
+    el.querySelectorAll('[data-trun]').forEach(b=>b.onclick=()=>tplRun(b.dataset.trun));
+    el.querySelectorAll('[data-tstop]').forEach(b=>b.onclick=()=>tplStop(b.dataset.tstop));
+    el.querySelectorAll('[data-tedit]').forEach(b=>b.onclick=()=>tplEdit(b.dataset.tedit));
+    el.querySelectorAll('[data-tdup]').forEach(b=>b.onclick=()=>tplDup(b.dataset.tdup));
+    el.querySelectorAll('[data-ttog]').forEach(b=>b.onclick=()=>tplToggle(b.dataset.ttog));
+    el.querySelectorAll('[data-tlogs]').forEach(b=>b.onclick=()=>tplLogs(b.dataset.tlogs));
+    el.querySelectorAll('[data-tdel]').forEach(b=>twoStep(b,'Delete',()=>tplDelete(b.dataset.tdel)));
+  }catch(e){}
+}
+async function tplRun(id){
+  try{ const r=await api('/api/automation/run',{method:'POST',auth:true,body:{template_id:id}});
+    AU.task=r.task_id; toast('ok','Task '+r.task_id+' started'); autoPollStart(); loadTemplates();
+  }catch(e){ toast('err',e.message); scErr(e.message); }
+}
+async function tplStop(id){
+  try{ await api('/api/automation/stop',{method:'POST',auth:true,body:{template_id:id}});
+    toast('ok','Stopped'); autoPoll(); loadTemplates();
+  }catch(e){ toast('err',e.message); }
+}
+function tplEdit(id){
+  const t=AU.templates.find(x=>x.template_id===id); if(!t) return;
+  if($('sc-code').value.trim() && !confirm('Replace current code with "'+t.name+'"?')) return;
+  AU.editing=id; $('sc-name').value=t.name; $('sc-code').value=t.code||''; editorLines();
+  toast('info','Editing '+t.name);
+}
+async function tplDup(id){
+  try{ await api('/api/automation/templates/duplicate',{method:'POST',auth:true,body:{template_id:id}});
+    toast('ok','Duplicated'); loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplToggle(id){
+  const t=AU.templates.find(x=>x.template_id===id); if(!t) return;
+  try{ await api('/api/automation/templates/toggle',{method:'POST',auth:true,body:{template_id:id,enabled:!t.enabled}});
+    loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplDelete(id){
+  try{ await api('/api/automation/templates/delete',{method:'POST',auth:true,body:{template_id:id}});
+    if(AU.editing===id) AU.editing=null;
+    toast('info','Deleted'); loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplLogs(id){
+  try{
+    const r=await api('/api/automation/logs?template_id='+encodeURIComponent(id),{auth:true});
+    AU.task=r.task_id||null; renderRunCard(r.task);
+    scTerm((r.logs||[]).map(l=>({ts:l.ts,level:l.level,msg:l.msg})), true);
+    if(!(r.logs||[]).length) scTerm([{ts:Date.now()/1000,level:'INFO',msg:'No logs yet for this template'}],true);
+  }catch(e){ toast('err',e.message); }
+}
+$('btn-tpl-refresh').onclick=loadTemplates;
+$('btn-tpl-heal').onclick=async()=>{
+  try{ const r=await api('/api/automation/heal',{method:'POST',auth:true,body:{}});
+    scTerm([{ts:Date.now()/1000,level:'OK',msg:'HEAL ▸ '+((r.healed||[]).join(' | ')||'nothing to recover')}],true);
+    toast('ok','Healing done (runtime only)'); loadTemplates();
+  }catch(e){ toast('err',e.message); }
+};
+
+/* per-account config (main channel / source / destination) */
+async function loadAccountCfg(){
+  const id=$('ac-account').value;
+  if(!S.auth||!id) return;
+  try{
+    const r=await api('/api/account/config?account_id='+encodeURIComponent(id),{auth:true});
+    const c=r.config||{};
+    $('ac-main').value=c.main_channel||''; $('ac-src').value=c.source||''; $('ac-dst').value=c.destination||'';
+  }catch(e){}
+}
+$('ac-account').onchange=loadAccountCfg;
+$('btn-ac-save').onclick=async()=>{
+  const id=$('ac-account').value;
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(!id) return toast('err','Select an account');
+  try{
+    await api('/api/account/config',{method:'POST',auth:true,body:{account_id:id,
+      main_channel:$('ac-main').value.trim(), source:$('ac-src').value.trim(),
+      destination:$('ac-dst').value.trim()}});
+    toast('ok','Account config saved');
+  }catch(e){ toast('err',e.message); }
+};
 
 /* greeting + first sync */
 term('sys', 'DEVIL JARVIS CORE v3.1 — Telegram AI Control System');
