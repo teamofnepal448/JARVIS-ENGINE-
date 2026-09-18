@@ -152,7 +152,7 @@ jobs_store     = JSONStore(DATA / "scheduled_jobs.json", [])
 runtime_store  = JSONStore(DATA / "runtime_config.json", DEFAULT_RUNTIME)
 accounts_store = JSONStore(DATA / "accounts.json", {"accounts": []})
 scripts_store  = JSONStore(DATA / "scripts.json", {})
-templates_store = JSONStore(DATA / "script_templates.json", {})
+templates_store = JSONStore(DATA / "templates.json", {})
 automation_store = JSONStore(DATA / "automation_templates.json", {"templates": []})
 acctcfg_store = JSONStore(DATA / "account_config.json", {})
 
@@ -1594,6 +1594,21 @@ class TelegramManager:
                     safe_log("WARN", "AUTH", f"Ignored message from non-admin {sender} (fail closed)")
                     return
                 text = (event.raw_text or "").strip()
+                # /setchannel — per-account channel config straight from Telegram (§1)
+                m_set = re.match(r"^\s*/setchannel\s+(main|source|destination)\s+(\S+)\s*$", text, re.I)
+                if m_set:
+                    reply = await set_channel_cmd(sender, m_set.group(1).lower(), m_set.group(2))
+                    await event.reply(reply)
+                    return
+                if re.match(r"^\s*/setchannel\b", text, re.I):
+                    await event.reply(
+                        "USAGE ▸ /setchannel <main|source|destination> <id_or_@username>\\n"
+                        "Example ▸ /setchannel main 1716302260\\n"
+                        "Ye setting sirf is account ke liye save hoti hai (per-account config).")
+                    return
+                if re.match(r"^\s*/getchannel\b", text, re.I):
+                    await event.reply(get_channel_cmd(sender))
+                    return
                 prefixed = re.match(r"^\s*\/?(ai|jarvis|cross|task|monitor)\b", text, re.I)
                 confirm_pending = f"tg:{sender}" in PENDING_CONFIRM
                 if not prefixed and not confirm_pending:
@@ -1608,6 +1623,59 @@ class TelegramManager:
                 await asyncio.sleep(fw.seconds)
             except Exception as e:
                 log.error("Saved-messages handler error: %s", type(e).__name__)
+
+def _account_for_user(user_id):
+    """Map a Telegram sender to the managed account whose session it is."""
+    for aid, acc in ACCOUNTS.accounts.items():
+        if str(acc["meta"].get("user_id")) == str(user_id):
+            return aid, acc
+    active = ACCOUNTS.get_active()
+    if active:
+        return active["meta"]["id"], active
+    return None, None
+
+async def set_channel_cmd(sender_id, kind, value):
+    """/setchannel <main|source|destination> <id|@username> — per-account, no .env."""
+    aid, acc = _account_for_user(sender_id)
+    if not aid:
+        return "NO ACCOUNT ▸ pehle web dashboard se account add/activate karo."
+    key = {"main": "main_channel", "source": "source", "destination": "destination"}[kind]
+    val = str(value).strip()
+    resolved = ""
+    client = (acc or {}).get("client")
+    if client:
+        try:
+            ent = await client.get_entity(int(val) if val.lstrip("-").isdigit() else val)
+            resolved = f" ({getattr(ent, 'title', None) or getattr(ent, 'username', '') or 'resolved'})"
+        except Exception as e:
+            resolved = f" (warning: resolve failed — {type(e).__name__}; value saved as given)"
+    store = acctcfg_store.load()
+    cfg = store.get(aid, {})
+    cfg[key] = val
+    cfg["updated_at"] = int(time.time())
+    store[aid] = cfg
+    await acctcfg_store.save(store)
+    safe_log("CMD", "ACCOUNT", f"/setchannel {kind} for {aid}")
+    c = acct_cfg(aid)
+    return ("CHANNEL SET\n"
+            f"Account     ▸ @{acc['meta'].get('username')} ({aid})\n"
+            f"{kind.upper():11s} ▸ {val}{resolved}\n"
+            "────────────────────────────\n"
+            f"main        ▸ {c.get('main_channel') or 'not set'}\n"
+            f"source      ▸ {c.get('source') or 'not set'}\n"
+            f"destination ▸ {c.get('destination') or 'not set'}")
+
+def get_channel_cmd(sender_id):
+    aid, acc = _account_for_user(sender_id)
+    if not aid:
+        return "NO ACCOUNT ▸ pehle account add/activate karo."
+    c = acct_cfg(aid)
+    return ("CHANNEL CONFIG\n"
+            f"Account     ▸ @{acc['meta'].get('username')} ({aid})\n"
+            f"main        ▸ {c.get('main_channel') or 'not set'}\n"
+            f"source      ▸ {c.get('source') or 'not set'}\n"
+            f"destination ▸ {c.get('destination') or 'not set'}\n"
+            "Change ▸ /setchannel main <id>")
 
 TG = TelegramManager()
 
@@ -3285,6 +3353,88 @@ async def _await_entry_points(code, g, acc_id):
             await fn()
 
 
+# ---------------------------------------------------------------------------
+# SELF-HEALING ERROR ENGINE (§4)
+#   Intercepts FloodWait / connection resets / transient runtime errors during
+#   custom script execution and retries with bounded backoff (max 5 attempts).
+#   FloodWait always waits the EXACT Telegram-mandated delay — never bypassed.
+#   The server stays alive and no re-deploy is ever required.
+# ---------------------------------------------------------------------------
+HEAL_MAX_RETRIES = 5
+HEAL_STATS = {}     # acc_id -> {"retries": n, "floodwait_s": n, "reconnects": n, "last": str}
+
+# transient failures worth retrying (connection resets, timeouts, DC migrations)
+_TRANSIENT = ("ConnectionError", "ConnectionResetError", "TimeoutError", "OSError",
+              "ServerError", "RpcCallFailError", "TimedOutError", "AuthKeyError",
+              "ConnectionAbortedError", "ConnectionRefusedError", "IncompleteReadError")
+
+def _heal_stat(acc_id, key, amount=1, note=None):
+    s = HEAL_STATS.setdefault(acc_id, {"retries": 0, "floodwait_s": 0, "reconnects": 0, "last": None})
+    s[key] = s.get(key, 0) + amount
+    if note:
+        s["last"] = note[:160]
+    return s
+
+async def _heal_reconnect(acc_id):
+    """Bring a dropped client back up (bounded, never fatal)."""
+    acc = ACCOUNTS.accounts.get(acc_id) or {}
+    client = acc.get("client")
+    if not client:
+        return False
+    try:
+        if not client.is_connected():
+            await client.connect()
+            _heal_stat(acc_id, "reconnects", 1, "telegram client reconnected")
+            ScriptLogger.put(acc_id, "OK", "HEAL ▸ telegram client reconnected")
+        return bool(client.is_connected())
+    except Exception as e:
+        ScriptLogger.put(acc_id, "WARN", f"HEAL ▸ reconnect failed ({type(e).__name__})")
+        return False
+
+async def heal_retry(acc_id, fn, *args, **kwargs):
+    """Run an awaitable/callable with self-healing backoff. Returns its result.
+    Raises the final exception only after HEAL_MAX_RETRIES attempts."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            out = fn(*args, **kwargs) if callable(fn) else fn
+            if inspect.isawaitable(out):
+                out = await out
+            if attempt > 1:
+                ScriptLogger.put(acc_id, "OK", f"HEAL ▸ recovered after {attempt - 1} retry(s)")
+            return out
+        except asyncio.CancelledError:
+            raise
+        except FloodWaitError as fw:
+            secs = int(getattr(fw, "seconds", 0) or 0)
+            _heal_stat(acc_id, "floodwait_s", secs, f"FloodWait {secs}s")
+            if attempt > HEAL_MAX_RETRIES:
+                ScriptLogger.put(acc_id, "ERROR", f"HEAL ▸ giving up after {HEAL_MAX_RETRIES} FloodWaits")
+                raise
+            ScriptLogger.put(acc_id, "WARN",
+                             f"HEAL ▸ FloodWait {secs}s — waiting exact duration "
+                             f"(attempt {attempt}/{HEAL_MAX_RETRIES}, no bypass)")
+            _heal_stat(acc_id, "retries", 1)
+            await asyncio.sleep(secs)
+        except Exception as e:
+            name = type(e).__name__
+            transient = (name in _TRANSIENT or name == "_TransientRun"
+                         or "Connection" in name or "Timeout" in name)
+            if not transient or attempt > HEAL_MAX_RETRIES:
+                if not transient:
+                    ScriptLogger.put(acc_id, "ERROR", f"{name}: {str(e)[:160]} (not retryable)")
+                else:
+                    ScriptLogger.put(acc_id, "ERROR", f"HEAL ▸ exhausted {HEAL_MAX_RETRIES} retries — {name}")
+                raise
+            delay = min(2 ** (attempt - 1), 30)     # 1,2,4,8,16,30 capped
+            _heal_stat(acc_id, "retries", 1, f"{name} -> backoff {delay}s")
+            ScriptLogger.put(acc_id, "WARN",
+                             f"HEAL ▸ {name} — backoff {delay}s (attempt {attempt}/{HEAL_MAX_RETRIES})")
+            await _heal_reconnect(acc_id)
+            await asyncio.sleep(delay)
+
+
 class RawScriptRunner:
     """exec(code, globals_dict) with the spec's injected globals (Raw Mode)."""
 
@@ -3317,11 +3467,20 @@ class RawScriptRunner:
         if client is None:
             raise RuntimeError("Account not connected")
 
-        def log(msg):
-            ScriptLogger.put(acc_id, "INFO", msg)
+        def log(msg, level="INFO"):
+            lv = str(level).upper()
+            ScriptLogger.put(acc_id, lv if lv in ("INFO", "WARN", "ERROR", "OK") else "INFO", msg)
 
         async def sleep(secs):
             await asyncio.sleep(float(secs))
+
+        # per-account channel configuration (§1) — never from .env
+        _acfg = acct_cfg(acc_id)
+        _main = _acfg.get("main_channel")
+        try:
+            _main = int(_main) if _main not in (None, "") and str(_main).lstrip("-").isdigit() else _main
+        except Exception:
+            pass
 
         # `import asyncio` would rebind the name to the REAL module, silently
         # bypassing task tracking — so __import__ hands back the tracked proxy.
@@ -3340,9 +3499,16 @@ class RawScriptRunner:
             "client": client,
             "SESSION_STRING": session,
             "PHONE": meta.get("phone") or None,
+            # per-account channels (unique per account, web/Telegram configurable)
+            "MAIN_CHANNEL_ID": _main,
+            "SOURCE_CHANNEL": _acfg.get("source"),
+            "DESTINATION_CHANNEL": _acfg.get("destination"),
+            "ACCOUNT_ID": acc_id,
             "log": log,
             "print": lambda *a: ScriptLogger.put(acc_id, "INFO", " ".join(str(x) for x in a)[:400]),
             "sleep": sleep,
+            # self-healing helper available to scripts
+            "with_retry": lambda fn, *a, **k: heal_retry(acc_id, fn, *a, **k),
             # tracked asyncio so spawned loops can be cancelled on Stop
             "asyncio": _ModuleProxy("asyncio"),
             "re": re, "time": time, "os": os,
@@ -3426,7 +3592,25 @@ async def _run_task(acc_id, code, mode="safe"):
     progress = SCRIPT_PROGRESS.setdefault(acc_id, {"handlers": [], "spawned": [], "stopped": False})
     runner = RawScriptRunner if mode == "raw" else SafeScriptRunner
     try:
-        res = await runner.run(code, ACCOUNTS.accounts.get(acc_id, {}), acc_id, progress)
+        # §4 self-healing: transient failures (FloodWait / connection resets) are
+        # retried with bounded backoff instead of killing the script or server.
+        class _TransientRun(Exception):
+            """Marks a script exit that self-healing should retry."""
+
+        async def _attempt():
+            await _heal_reconnect(acc_id)
+            r = await runner.run(code, ACCOUNTS.accounts.get(acc_id, {}), acc_id, progress)
+            err = str((r or {}).get("error") or "")
+            head = err.split(":")[0].strip()
+            retryable = head in _TRANSIENT or "Connection" in head or "Timeout" in head
+            if not (r or {}).get("ok") and retryable:
+                raise _TransientRun(err)
+            return r
+
+        try:
+            res = await heal_retry(acc_id, _attempt)
+        except _TransientRun as te:
+            res = {"ok": False, "error": str(te)}
         alive_spawn = any(not t.done() for t in list(progress.get("spawned", [])))
         keep = bool(progress.get("handlers")) or alive_spawn
         if res.get("ok") and keep:
@@ -3573,9 +3757,15 @@ def auto_log(task, level, msg):
         ScriptLogger.put(acc, level, f"[{task['task_id']}] {msg}")
 
 def acct_cfg(acc_id):
+    """Per-account channel configuration — unique per account, never from .env."""
     cfg = acctcfg_store.load().get(acc_id, {})
     return {"main_channel": cfg.get("main_channel"), "source": cfg.get("source"),
-            "destination": cfg.get("destination"), "keywords": cfg.get("keywords") or DEFAULT_KEYWORDS}
+            "destination": cfg.get("destination"),
+            # aliases so API clients/scripts can use either naming
+            "main_channel_id": cfg.get("main_channel"),
+            "source_channel": cfg.get("source"),
+            "destination_channel": cfg.get("destination"),
+            "keywords": cfg.get("keywords") or DEFAULT_KEYWORDS}
 
 async def _resolve_for(client, ref):
     ref = str(ref).strip().lstrip("@")
@@ -4803,9 +4993,15 @@ async def api_account_config():
         return jsonify({"ok": False, "error": "Account not found"}), 400
     store = acctcfg_store.load()
     cfg = store.get(acc_id, {})
-    for k in ("main_channel", "source", "destination"):
-        if k in body:
-            cfg[k] = str(body[k]).strip() or None
+    # canonical keys + the aliases used by the web UI / API clients
+    aliases = {"main_channel": ("main_channel", "main_channel_id", "mainChannelId"),
+               "source": ("source", "source_channel", "sourceChannel"),
+               "destination": ("destination", "destination_channel", "destinationChannel")}
+    for canon, keys in aliases.items():
+        for k in keys:
+            if k in body:
+                cfg[canon] = str(body[k]).strip() or None
+                break
     if "keywords" in body:
         v = body["keywords"]
         cfg["keywords"] = [x.strip() for x in v.split(",")] if isinstance(v, str) else list(v or [])
@@ -4814,6 +5010,107 @@ async def api_account_config():
     await acctcfg_store.save(store)
     safe_log("CMD", "ACCOUNT", f"config saved for {acc_id}")
     return jsonify({"ok": True, "config": acct_cfg(acc_id)})
+
+# ---- requested API shape (§2,§3): /api/script/* aliases over the same engine
+@app.route("/api/script/run", methods=["POST"])
+@require_token
+async def api_script_run_alias():
+    """Run a pasted Telethon script for ONE account (raw context + healing)."""
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    code = str(body.get("code", ""))
+    mode = str(body.get("mode", "raw")).lower()
+    mode = mode if mode in ("safe", "raw") else "raw"
+    if acc_id not in ACCOUNTS.accounts:
+        return jsonify({"ok": False, "error": "Account not found — select a valid account"}), 400
+    if not code.strip():
+        return jsonify({"ok": False, "error": "Script is empty"}), 400
+    ok, err = (RawScriptRunner if mode == "raw" else SafeScriptRunner).validate(code)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    raw = scripts_store.load()
+    prev = raw.get(acc_id, {})
+    raw[acc_id] = {"name": str(body.get("name", "")).strip()[:60] or prev.get("name", ""),
+                   "code": code, "template": str(body.get("template", "custom"))[:40],
+                   "mode": mode, "running": False,
+                   "installed_at": prev.get("installed_at"), "updated_at": int(time.time())}
+    await scripts_store.save(raw)
+    ok_run, payload = await start_script(acc_id)
+    if not ok_run:
+        return jsonify({"ok": False, "error": payload}), 400
+    return jsonify({"ok": True, "account_id": acc_id, "mode": mode, "running": True,
+                    "main_channel_id": acct_cfg(acc_id).get("main_channel")})
+
+@app.route("/api/script/stop", methods=["POST"])
+@require_token
+async def api_script_stop_alias():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    if acc_id not in SCRIPT_TASKS and acc_id not in SCRIPT_PROGRESS:
+        return jsonify({"ok": False, "error": "No running script for this account"}), 400
+    await stop_script(acc_id, "web")
+    return jsonify({"ok": True, "account_id": acc_id, "running": False})
+
+@app.route("/api/script/logs/<account_id>", methods=["GET"])
+@require_token
+async def api_script_logs_alias(account_id):
+    acc_id = str(account_id)
+    try:
+        limit = max(1, min(int(request.args.get("limit", 200)), 500))
+    except ValueError:
+        limit = 200
+    return jsonify({"ok": True, "account_id": acc_id, "running": acc_id in SCRIPT_TASKS,
+                    "logs": ScriptLogger.tail(acc_id, limit),
+                    "healing": HEAL_STATS.get(acc_id, {"retries": 0, "floodwait_s": 0,
+                                                       "reconnects": 0, "last": None})})
+
+@app.route("/api/script/logs/<account_id>/clear", methods=["POST"])
+@require_token
+async def api_script_logs_clear_alias(account_id):
+    ScriptLogger.clear(str(account_id))
+    return jsonify({"ok": True})
+
+@app.route("/api/script/templates", methods=["GET", "POST"])
+@require_token
+async def api_script_templates_alias():
+    """GET -> saved reusable script templates; POST -> save one (templates.json)."""
+    if request.method == "GET":
+        acc_id = str(request.args.get("account_id", ""))
+        out = []
+        for key, t in templates_store.load().items():
+            if acc_id and t.get("account_id") and t.get("account_id") != acc_id:
+                continue
+            out.append({"id": key, "name": t.get("label", key), "code": t.get("code", ""),
+                        "mode": t.get("mode", "raw"), "account_id": t.get("account_id"),
+                        "updated_at": t.get("updated_at")})
+        for key, t in SCRIPT_TEMPLATES.items():
+            out.append({"id": key, "name": t["label"], "code": t["code"],
+                        "mode": t.get("mode", "raw"), "account_id": None, "builtin": True})
+        return jsonify({"ok": True, "templates": out})
+    body = await request.get_json(silent=True) or {}
+    name = str(body.get("name", "")).strip()[:40] or "User Template"
+    code = str(body.get("code", ""))
+    mode = str(body.get("mode", "raw")).lower()
+    mode = mode if mode in ("safe", "raw") else "raw"
+    ok, err = (RawScriptRunner if mode == "raw" else SafeScriptRunner).validate(code)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    store = templates_store.load()
+    key = str(body.get("id", "")).strip() or ("user_" + uuid.uuid4().hex[:5])
+    store[key] = {"label": name, "code": code, "mode": mode,
+                  "account_id": str(body.get("account_id", "")) or None,
+                  "updated_at": int(time.time())}
+    await templates_store.save(store)
+    safe_log("CMD", "SCRIPT", f"template '{name}' saved ({key})")
+    return jsonify({"ok": True, "id": key, "name": name})
+
+@app.route("/api/script/healing/<account_id>", methods=["GET"])
+@require_token
+async def api_script_healing(account_id):
+    return jsonify({"ok": True, "account_id": account_id,
+                    "max_retries": HEAL_MAX_RETRIES,
+                    "stats": HEAL_STATS.get(str(account_id),
+                                            {"retries": 0, "floodwait_s": 0, "reconnects": 0, "last": None})})
 
 @app.errorhandler(404)
 async def not_found(_e):

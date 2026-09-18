@@ -691,6 +691,7 @@ main()"></textarea>
           <div class="term-toolbar">
             <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">SCRIPT TERMINAL</span>
             <span style="margin-left:auto"></span>
+            <span id="sc-heal" class="hidden" style="font-family:var(--mono);font-size:8.5px;color:#fcd34d;letter-spacing:.1em"></span>
             <button class="mini" id="btn-sc-pause">Pause</button>
             <button class="mini red" id="btn-sc-clear">Clear</button>
           </div>
@@ -1550,8 +1551,15 @@ function scTerm(lines, replace){
 async function scFetchLogs(accId){
   if(!accId||!S.auth) return;
   try{
-    const r=await api('/api/scripts/logs?account_id='+encodeURIComponent(accId),{auth:true});
+    const r=await api('/api/script/logs/'+encodeURIComponent(accId),{auth:true});
     scTerm(r.logs||[], true);
+    const h=r.healing||{};
+    const hb=$('sc-heal');
+    if(hb){
+      const active=(h.retries||0)||(h.floodwait_s||0)||(h.reconnects||0);
+      hb.classList.toggle('hidden', !active);
+      if(active) hb.textContent='HEAL ▸ '+(h.retries||0)+' retries · '+(h.floodwait_s||0)+'s floodwait · '+(h.reconnects||0)+' reconnects';
+    }
     const wasRunning = SC.running;
     SC.running = !!r.running; scButtons();
     if(wasRunning && !SC.running) scStopPoll();
@@ -1696,7 +1704,7 @@ $('btn-sc-stop').onclick=async()=>{
 $('btn-sc-clear').onclick=async()=>{
   $('sc-out').innerHTML='';
   const accId=$('sc-account').value;
-  if(S.auth&&accId){ try{ await api('/api/scripts/logs/clear',{method:'POST',auth:true,body:{account_id:accId}});}catch(e){} }
+  if(S.auth&&accId){ try{ await api('/api/script/logs/'+encodeURIComponent(accId)+'/clear',{method:'POST',auth:true,body:{}});}catch(e){} }
   scTerm([{ts:Date.now()/1000,level:'INFO',msg:'Terminal cleared'}], true);
 };
 $('btn-sc-pause').onclick=()=>{
