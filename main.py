@@ -463,7 +463,8 @@ class CrossEngine:
         if not cid or not ids:
             self.eng["last_event"] = "SOURCE NOT AVAILABLE — web Source Config panel ya ENV se set karo"
             state_store.save_bg(STATE)
-            return {"ok": False, "lines": ["SOURCE NOT AVAILABLE ▸ Source Configuration panel me source set karo (ya ENV) — engine start nahi hui"]}
+            return {"ok": False, "lines": SOURCE_NOT_AVAILABLE_HELP + [
+                "", "(ya web dashboard ke Source Configuration panel se source set karo)"]}
         if not self.eng["queue"]:
             msg = await self.rebuild_queue()
             if msg:
@@ -604,6 +605,75 @@ class CrossEngine:
             state_store.save_bg(STATE)
 
 ENGINE = CrossEngine()
+
+# ---------------------------------------------------------------------------
+# REPLY-BASED CROSS SOURCE (Saved Messages)
+#   Reply to any saved post and send "/cross start" — the replied message
+#   becomes the Cross source automatically. No manual IDs, and the existing
+#   Cross Engine is reused unchanged (we only feed it a resolved source).
+# ---------------------------------------------------------------------------
+REPLY_SOURCE = {}          # origin -> {chat_id, message_id, preview, at}
+REPLY_SOURCE_TTL = 600     # a captured reply stays usable for 10 minutes
+
+SOURCE_NOT_AVAILABLE_HELP = [
+    "SOURCE NOT AVAILABLE",
+    "",
+    "Reply to the post/message in Saved Messages and send:",
+    "",
+    "/cross start",
+]
+
+def remember_reply_source(origin, chat_id, message_id, preview=""):
+    """Store the message a command was sent in reply to."""
+    try:
+        REPLY_SOURCE[origin] = {"chat_id": int(chat_id), "message_id": int(message_id),
+                                "preview": str(preview or "")[:90], "at": time.time()}
+    except Exception:
+        return
+    safe_log("INFO", "CROSS", f"reply source captured ▸ chat {chat_id} ▸ msg {message_id}")
+
+def take_reply_source(origin):
+    """Consume-once: a captured reply is used for exactly one cross start, so a
+    later '/cross start' sent WITHOUT a reply never silently reuses it."""
+    r = REPLY_SOURCE.pop(origin, None)
+    if not r:
+        return None
+    if time.time() - r["at"] > REPLY_SOURCE_TTL:
+        return None
+    return r
+
+async def apply_reply_source(chat_id, message_id):
+    """Persist the replied message as the cross source (existing engine reads this)."""
+    cfg = runtime_store.load()
+    cfg["source_chat_id"] = int(chat_id)
+    cfg["source_message_ids"] = [int(message_id)]
+    cfg["updated_at"] = int(time.time())
+    await runtime_store.save(cfg)
+    ENGINE.reload_config()
+    safe_log("CMD", "CROSS", f"source set from reply ▸ chat {chat_id} ▸ msg {message_id}")
+
+async def capture_reply_from_event(event, origin):
+    """If a Saved-Messages command is a reply, resolve the real replied message."""
+    try:
+        if not getattr(event, "is_reply", False):
+            return None
+        rm = await event.get_reply_message()
+        if not rm:
+            return None
+        chat_id = getattr(rm, "chat_id", None)
+        if chat_id is None:
+            chat_id = getattr(event, "chat_id", None)
+        if chat_id is None:
+            return None
+        preview = (getattr(rm, "text", None) or getattr(rm, "message", None) or "")[:90]
+        if not preview:
+            preview = "(media / non-text message)"
+        remember_reply_source(origin, chat_id, rm.id, preview)
+        return {"chat_id": int(chat_id), "message_id": int(rm.id), "preview": preview}
+    except Exception as e:
+        log.warning("reply capture failed: %s", type(e).__name__)
+        return None
+
 
 # ============================================================================
 # SOURCE MONITOR — real-time, event-based (fast mode), dedupe, persistent
@@ -1080,6 +1150,10 @@ def classify(raw, origin):
             if has(c, V_CONFIG):  plan.steps.append(Step("cross_config", {})); continue
             if has(c, V_STOP):    plan.steps.append(Step("cross_stop", {})); continue
             if has(c, V_START):   plan.steps.append(Step("cross_start", {})); continue
+            # "is message ko cross karo" / "reply wale post se cross karo" / "cross kro"
+            if has(c, ("cross karo", "cross kar do", "cross kar", "cross kro", "ko cross",
+                       "se cross", "cross this", "cross it")):
+                plan.steps.append(Step("cross_start", {})); continue
             if has(c, V_STATUS + ("ka ",)):
                 plan.steps.append(Step("cross_status", {})); continue
 
@@ -1602,8 +1676,8 @@ class TelegramManager:
                     return
                 if re.match(r"^\s*/setchannel\b", text, re.I):
                     await event.reply(
-                        "USAGE ▸ /setchannel <main|source|destination> <id_or_@username>\\n"
-                        "Example ▸ /setchannel main 1716302260\\n"
+                        "USAGE ▸ /setchannel <main|source|destination> <id_or_@username>\n"
+                        "Example ▸ /setchannel main 1716302260\n"
                         "Ye setting sirf is account ke liye save hoti hai (per-account config).")
                     return
                 if re.match(r"^\s*/getchannel\b", text, re.I):
@@ -1613,7 +1687,11 @@ class TelegramManager:
                 confirm_pending = f"tg:{sender}" in PENDING_CONFIRM
                 if not prefixed and not confirm_pending:
                     return
-                result = await handle_command(text, origin=f"tg:{sender}")
+                origin = f"tg:{sender}"
+                # Saved Messages: if this command is a reply, the replied message
+                # becomes the cross source automatically (no manual IDs needed).
+                await capture_reply_from_event(event, origin)
+                result = await handle_command(text, origin=origin)
                 reply = "\n".join(result.get("lines") or ["Koi output nahi."])[:3800]
                 await event.reply(reply)
                 safe_log("CMD", "TELEGRAM", f"/AI from admin {sender} -> plan executed")
@@ -2191,7 +2269,20 @@ async def t_send_update(p, o):
     return await t_copy_source(p, o)
 
 # ---------------- cross engine ----------------
-async def t_cross_start(p, o):    return await ENGINE.start(p, o)
+async def t_cross_start(p, o):
+    """Start cross. If the command came as a reply in Saved Messages, that
+    replied message becomes the source automatically (no manual IDs)."""
+    rs = take_reply_source(o)
+    if rs:
+        await apply_reply_source(rs["chat_id"], rs["message_id"])
+        r = await ENGINE.start(p, o)
+        head = ["✓ CROSS STARTED" if r.get("ok", True) else "CROSS START FAILED", bar,
+                "Source ▸ replied message (auto-detected)",
+                f"  chat_id    ▸ {rs['chat_id']}",
+                f"  message_id ▸ {rs['message_id']}",
+                f"  preview    ▸ {rs['preview']}", bar]
+        return {"ok": r.get("ok", True), "lines": head + (r.get("lines") or [])}
+    return await ENGINE.start(p, o)
 async def t_cross_stop(p, o):     return ENGINE.stop()
 async def t_cross_pause(p, o):    return await ENGINE.pause(p, o)
 async def t_cross_resume(p, o):   return await ENGINE.resume(p, o)
