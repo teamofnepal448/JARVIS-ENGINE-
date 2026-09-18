@@ -1,5 +1,6 @@
-# DEVIL JARVIS — single-file deployment, no database
+# DEVIL JARVIS v4.0 — single-file deployment, no database
 quart>=0.19.6,<0.21
 telethon>=1.34.0
 httpx>=0.27.0
 hypercorn>=0.15.0
+cryptography>=42.0.0

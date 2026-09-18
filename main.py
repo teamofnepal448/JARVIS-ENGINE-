@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 # ============================================================================
-# DEVIL JARVIS — TELEGRAM JARVIS NATURAL LANGUAGE CONTROL  (single file)
+# DEVIL JARVIS v4.0 — TELEGRAM JARVIS NATURAL LANGUAGE CONTROL (single file)
 #
-#   Telegram message -> /AI detection -> NLU (intent + params + conditions)
-#   -> structured plan -> permission/safety validation -> confirmation (if
-#   sensitive) -> predefined TOOL REGISTRY execution -> real Telegram result
-#   -> JARVIS reply.
-#
-#   AI NEVER executes arbitrary Python/shell/Telegram methods. It can only
-#   select tools from the allowlisted registry below. Unsupported requests
-#   are honestly reported — JARVIS never fakes success.
+#   /AI <natural language> -> NLU (intent + params + conditions, fuzzy) ->
+#   plan -> validation -> expiring confirmation -> TOOL REGISTRY (whitelist)
+#   -> real Telegram result -> reply. No arbitrary execution anywhere —
+#   user scripts run only inside the AST sandbox below.
 #
 #   Render ready:  python main.py  ->  0.0.0.0:$PORT   (health: /health)
 #   Clock: Asia/Kathmandu (NPT). Single running instance by design.
+#   Secrets: ENV only, or Fernet-encrypted (JARVIS_SECRET_KEY) in JSON.
 # ============================================================================
 
+import ast
 import asyncio
 import hmac
 import json
@@ -41,16 +39,22 @@ try:
         RPCError, SessionPasswordNeededError, UserNotParticipantError,
     )
     TELETHON_OK = True
-except Exception:  # telethon missing -> web layer still boots cleanly
+except Exception:
     TelegramClient = None
     TELETHON_OK = False
 
 try:
     import httpx
-except Exception:  # optional cloud AI providers
+except Exception:
     httpx = None
 
-# ---- Asia/Kathmandu (explicit) ------------------------------------------------
+try:
+    from cryptography.fernet import Fernet
+    FERNET_OK = True
+except Exception:
+    FERNET_OK = False
+
+# ---- Asia/Kathmandu (explicit)
 try:
     from zoneinfo import ZoneInfo
     KTM = ZoneInfo("Asia/Kathmandu")
@@ -64,7 +68,8 @@ BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
 DATA.mkdir(exist_ok=True)
 
-SECRET_MARKERS = ("api_hash", "session", "password", "token", "otp", "secret", "api_key", "phone_code_hash")
+SECRET_MARKERS = ("api_hash", "session", "password", "token", "otp", "secret", "api_key",
+                  "phone_code_hash", "_enc")
 
 def scrub(obj):
     if isinstance(obj, dict):
@@ -117,16 +122,70 @@ DEFAULT_STATE = {
     "monitor": {"active": False, "task_id": None, "source": None, "destination": None,
                 "keywords": ["toss", "result", "winner", "score", "update", "line"],
                 "last_message_id": 0, "processed": 0, "last_event": "monitor idle"},
-    "account": None,               # SAFE metadata only — never a session
+    "account": None,
     "last_command": None,
     "last_error": None,
 }
-state_store   = JSONStore(DATA / "jarvis_state.json", DEFAULT_STATE)
-history_store = JSONStore(DATA / "ai_history.json", [])
-jobs_store    = JSONStore(DATA / "scheduled_jobs.json", [])
-STATE   = state_store.load()
-HISTORY = history_store.load()
+DEFAULT_RUNTIME = {"source_chat_id": None, "source_message_ids": [],
+                   "monitor_source": None, "monitor_destination": None,
+                   "dead_threshold_days": 30, "updated_at": 0}
+
+state_store    = JSONStore(DATA / "jarvis_state.json", DEFAULT_STATE)
+history_store  = JSONStore(DATA / "ai_history.json", [])
+jobs_store     = JSONStore(DATA / "scheduled_jobs.json", [])
+runtime_store  = JSONStore(DATA / "runtime_config.json", DEFAULT_RUNTIME)
+accounts_store = JSONStore(DATA / "accounts.json", {"accounts": []})
+scripts_store  = JSONStore(DATA / "scripts.json", {})
+
+STATE    = state_store.load()
+HISTORY  = history_store.load()   # BUG FIX 5: defined before any use
 STATE.setdefault("monitor", json.loads(json.dumps(DEFAULT_STATE["monitor"])))
+
+# ----------------------------------------------------------------------------
+# Fernet encryption — sessions stored encrypted in accounts.json
+# ----------------------------------------------------------------------------
+_FERNET_CACHE = None
+
+def _get_fernet():
+    global _FERNET_CACHE
+    if _FERNET_CACHE is not None:
+        return _FERNET_CACHE or None
+    key = os.getenv("JARVIS_SECRET_KEY", "").strip()
+    if not key:
+        log.warning("JARVIS_SECRET_KEY not set — sessions stay in memory only. "
+                    "Generate one: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"")
+        safe_log("WARN", "CRYPTO", "JARVIS_SECRET_KEY missing — sessions cannot persist across restarts")
+        _FERNET_CACHE = False
+        return None
+    try:
+        _FERNET_CACHE = Fernet(key.encode())
+        return _FERNET_CACHE
+    except Exception:
+        log.error("JARVIS_SECRET_KEY invalid — not a valid Fernet key")
+        _FERNET_CACHE = False
+        return None
+
+def encrypt_str(s):
+    if not FERNET_OK or not s:
+        return ""
+    f = _get_fernet()
+    if not f:
+        return ""
+    try:
+        return f.encrypt(str(s).encode()).decode()
+    except Exception:
+        return ""
+
+def decrypt_str(s):
+    if not FERNET_OK or not s:
+        return ""
+    f = _get_fernet()
+    if not f:
+        return ""
+    try:
+        return f.decrypt(s.encode()).decode()
+    except Exception:
+        return ""
 
 # ----------------------------------------------------------------------------
 # Auth (fail closed)
@@ -148,16 +207,41 @@ def require_token(fn):
         return await fn(*args, **kwargs)
     return wrapper
 
-def authorized_admin_ids(account):
-    raw = os.getenv("AUTHORIZED_ADMINS", "").strip()
-    ids = {int(x) for x in re.split(r"[,\s]+", raw) if x.strip().isdigit()}
-    if not ids and account:
-        ids = {int(account["user_id"])}
-    return ids
-
 def caller_origin():
     sid = request.headers.get("X-Session-Id", "").strip() if request else ""
     return f"web:{sid}" if sid else "web"
+
+# ----------------------------------------------------------------------------
+# Runtime source config — JSON config > ENV > default  (editable without redeploy)
+# ----------------------------------------------------------------------------
+def cfg_get():
+    cfg = runtime_store.load()
+    merged = dict(DEFAULT_RUNTIME)
+    merged.update({k: v for k, v in cfg.items() if v not in (None, "", [])})
+    return merged
+
+def cfg_source():
+    """(source_chat_id, [message_ids]) with JSON > ENV priority."""
+    cfg = cfg_get()
+    cid = cfg.get("source_chat_id") or os.getenv("SOURCE_CHAT_ID", "").strip()
+    ids = cfg.get("source_message_ids")
+    if not ids:
+        ids = [int(x) for x in re.split(r"[,\s]+", os.getenv("SOURCE_MESSAGE_IDS", "")) if x.strip().isdigit()]
+    ids = [int(x) for x in ids if str(x).strip().lstrip("-").isdigit()]
+    cid = str(cid).strip() if cid not in (None, "") else ""
+    return (cid if cid.lstrip("-").isdigit() else None), ids
+
+def cfg_monitor():
+    cfg = cfg_get()
+    src = STATE["monitor"].get("source") or cfg.get("monitor_source") or os.getenv("MONITOR_SOURCE", "").strip() or None
+    dst = STATE["monitor"].get("destination") or cfg.get("monitor_destination") or os.getenv("MONITOR_DESTINATION", "").strip() or None
+    return src, dst
+
+def cfg_dead_threshold():
+    try:
+        return int(cfg_get().get("dead_threshold_days") or os.getenv("DEAD_THRESHOLD_DAYS", "30"))
+    except Exception:
+        return 30
 
 # ----------------------------------------------------------------------------
 # Time — Asia/Kathmandu
@@ -191,16 +275,14 @@ def parse_rel_time(text):
     return None, None
 
 # ----------------------------------------------------------------------------
-# Session CONTEXT — short-lived memory per origin (expires, never permanent)
+# Short-lived CONTEXT per origin (expires, never permanent instructions)
 # ----------------------------------------------------------------------------
-CTX_TTL = 600  # 10 minutes
-CONTEXT = {}   # origin -> {last_channel, last_user, last_task, at}
+CTX_TTL = 600
+CONTEXT = {}
 
 def ctx_get(origin):
     c = CONTEXT.get(origin)
-    if not c:
-        return {}
-    if time.time() - c.get("at", 0) > CTX_TTL:
+    if not c or time.time() - c.get("at", 0) > CTX_TTL:
         CONTEXT.pop(origin, None)
         return {}
     return c
@@ -212,14 +294,12 @@ def ctx_set(origin, **kw):
     CONTEXT[origin] = c
 
 # ----------------------------------------------------------------------------
-# TOOL REGISTRY — the ONLY things JARVIS can ever do.
-# Every tool: name, description, params, validation, permission, confirmation,
-# execution, formatter. AI can select; it can never invent.
+# TOOL REGISTRY — the ONLY actions JARVIS can ever take
 # ----------------------------------------------------------------------------
 @dataclass
 class ToolParam:
     name: str
-    kind: str            # "chat" | "user" | "text" | "number" | "list" | "time"
+    kind: str
     required: bool = False
     desc: str = ""
 
@@ -231,8 +311,8 @@ class Tool:
     fn: object
     params: list = field(default_factory=list)
     needs_telegram: bool = True
-    confirm: bool = False        # destructive / sensitive -> explicit YES
-    sensitive: bool = False      # admin-grade action
+    confirm: bool = False
+    sensitive: bool = False
 
 class ToolRegistry:
     def __init__(self):
@@ -255,11 +335,10 @@ class ToolRegistry:
         connected, _ = TG.status()
         if t.needs_telegram and not connected:
             return {"ok": False, "lines": ["TELEGRAM DISCONNECTED ▸ pehle Telegram connect karo (web dashboard se ya env session)"]}
-        # validation phase
         for p in t.params:
             if p.required and not str(params.get(p.name, "")).strip():
                 hint = {"chat": "channel ka @username batao", "user": "user ka @username batao",
-                        "time": "time batao — jaise '10 minute baad' / '7:30 PM par'"} .get(p.kind, f"{p.name} chahiye")
+                        "time": "time batao — jaise '10 minute baad' / '7:30 PM par'"}.get(p.kind, f"{p.name} chahiye")
                 return {"ok": False, "lines": [f"PARAM MISSING ▸ {t.name} ke liye '{p.name}' zaroori hai — {hint}"]}
         try:
             result = await t.fn(params, origin)
@@ -275,8 +354,7 @@ class ToolRegistry:
         except UserNotParticipantError:
             return {"ok": False, "lines": ["ACCESS ERROR ▸ account is channel/group ka member nahi hai"]}
         except RPCError as e:
-            name_e = type(e).__name__
-            return {"ok": False, "lines": [f"TELEGRAM ERROR ▸ {name_e}: {str(e)[:140]}"]}
+            return {"ok": False, "lines": [f"TELEGRAM ERROR ▸ {type(e).__name__}: {str(e)[:140]}"]}
         except Exception as e:
             log.error("Tool %s failed: %s", name, type(e).__name__)
             STATE["last_error"] = f"{name}: {type(e).__name__}"
@@ -287,7 +365,7 @@ REG = ToolRegistry()
 bar = "────────────────────────────"
 
 async def resolve_chat(ref):
-    ref = str(ref).strip()
+    ref = str(ref).strip().lstrip("@")
     return await TG.client.get_entity(int(ref) if ref.lstrip("-").isdigit() else ref)
 
 # ============================================================================
@@ -295,7 +373,7 @@ async def resolve_chat(ref):
 # ============================================================================
 class TaskManager:
     def __init__(self):
-        self.tasks = {}   # id -> {id, kind, label, status, started_at, stop, reset, stats}
+        self.tasks = {}
 
     def register(self, kind, label, stop_fn, reset_fn=None, stats_fn=None, fixed_id=None):
         tid = fixed_id or f"{kind}-{uuid.uuid4().hex[:4].upper()}"
@@ -307,17 +385,12 @@ class TaskManager:
         if tid in self.tasks:
             self.tasks[tid]["status"] = status
 
-    def remove(self, tid):
-        self.tasks.pop(tid, None)
-
     def running(self):
         return [t for t in self.tasks.values() if t["status"] in ("RUNNING", "PAUSED")]
 
     async def stop(self, tid):
         t = self.tasks.get(tid)
-        if not t:
-            return None
-        if t["stop"]:
+        if t and t["stop"]:
             await t["stop"]()
         return t
 
@@ -341,16 +414,17 @@ class CrossEngine:
         return self.eng["status"]
 
     def source_configured(self):
-        cid = os.getenv("SOURCE_CHAT_ID", "").strip()
-        ids = [x for x in re.split(r"[,\s]+", os.getenv("SOURCE_MESSAGE_IDS", "")) if x.strip().isdigit()]
-        return (cid if cid.lstrip("-").isdigit() else None), [int(x) for x in ids]
+        return cfg_source()
+
+    def reload_config(self):
+        safe_log("CMD", "ENGINE", "Source config reloaded — engine picks it up on next cycle")
 
     def _task_sync(self):
         st = self.eng["status"]
         if st == "running" and not self.tid:
-            t = TASKS.register("CROSS", "Cross-Promotion Engine",
-                               stop_fn=self._task_stop, reset_fn=self.reset,
-                               stats_fn=lambda: f"{self.eng['processed']} done", fixed_id="CROSS-0001")
+            t = TASKS.register("CROSS", "Cross-Promotion Engine", stop_fn=self._task_stop,
+                               reset_fn=self.reset, stats_fn=lambda: f"{self.eng['processed']} done",
+                               fixed_id="CROSS-0001")
             self.tid = t["id"]
         if self.tid:
             TASKS.set_status(self.tid, {"running": "RUNNING", "paused": "PAUSED"}.get(st, "STOPPED"))
@@ -368,9 +442,9 @@ class CrossEngine:
             return {"ok": False, "lines": ["SOURCE NOT AVAILABLE ▸ Telegram not connected"]}
         cid, ids = self.source_configured()
         if not cid or not ids:
-            self.eng["last_event"] = "SOURCE NOT AVAILABLE — set SOURCE_CHAT_ID / SOURCE_MESSAGE_IDS"
+            self.eng["last_event"] = "SOURCE NOT AVAILABLE — web Source Config panel ya ENV se set karo"
             state_store.save_bg(STATE)
-            return {"ok": False, "lines": ["SOURCE NOT AVAILABLE ▸ SOURCE_CHAT_ID aur SOURCE_MESSAGE_IDS env vars configure karo — engine start nahi hui"]}
+            return {"ok": False, "lines": ["SOURCE NOT AVAILABLE ▸ Source Configuration panel me source set karo (ya ENV) — engine start nahi hui"]}
         if not self.eng["queue"]:
             msg = await self.rebuild_queue()
             if msg:
@@ -382,8 +456,7 @@ class CrossEngine:
         state_store.save_bg(STATE)
         safe_log("CMD", "ENGINE", f"Started ▸ {len(self.eng['queue'])} targets queued")
         return {"lines": [f"CROSS ENGINE STARTED ▸ {len(self.eng['queue'])} authorized targets queued",
-                          f"Task ID: {self.tid}",
-                          "Status: RUNNING ✅ paused flood-safe".replace(" ✅", "")]}
+                          f"Task ID: {self.tid}", "Status: RUNNING"]}
 
     def stop(self):
         self.eng["status"] = "stopped"
@@ -436,9 +509,9 @@ class CrossEngine:
                 f"Status       ▸ {self.eng['status'].upper()}{f' ▸ task {self.tid}' if self.tid else ''}",
                 f"Cycle delay  ▸ {self.CYCLE_DELAY}s per send (conservative pacing — limit-safe)",
                 f"Max attempts ▸ {self.MAX_ATTEMPTS} per target (phir deferred — infinite retry nahi)",
-                f"Source       ▸ {f'chat {cid} • messages {ids[:4]}' if cid and ids else 'NOT CONFIGURED — SOURCE_CHAT_ID / SOURCE_MESSAGE_IDS env vars set karo'}",
+                f"Source       ▸ {f'chat {cid} • messages {ids[:4]}' if cid and ids else 'NOT CONFIGURED — web Source Config panel ya ENV se set karo'}",
                 f"Queue        ▸ {len(self.eng['queue'])} pending ▸ {len(self.eng['deferred'])} deferred",
-                "Conditional pause ▸ manual via '/AI cross pause' / '/AI cross resume'"]
+                "Config hot-reload ▸ Source Config panel se save karte hi apply (redeploy nahi chahiye)"]
 
     async def rebuild_queue(self):
         folders = await scan_folders()
@@ -460,7 +533,7 @@ class CrossEngine:
     async def _loop(self):
         while True:
             await asyncio.sleep(self.CYCLE_DELAY)
-            if self.eng["status"] != "running":   # paused/stopped -> idle wait
+            if self.eng["status"] != "running":
                 continue
             now = time.time()
             hold = self.eng.get("flood_wait_until") or 0
@@ -473,7 +546,7 @@ class CrossEngine:
             cid, ids = self.source_configured()
             if not cid or not ids:
                 self.eng["status"] = "stopped"
-                self.eng["last_event"] = "SOURCE NOT AVAILABLE — configure source ids"
+                self.eng["last_event"] = "SOURCE NOT AVAILABLE — configure source"
                 self._task_sync()
                 state_store.save_bg(STATE)
                 continue
@@ -490,7 +563,9 @@ class CrossEngine:
                     state_store.save_bg(STATE)
                     safe_log("ERROR", "ENGINE", "Source message missing — engine stopped safely")
                     continue
-                await TG.client.forward_messages(int(item["chat_id"]), ids[0], from_peer=int(cid))
+                # BUG FIX 4: keyword-argument signature (Telethon version-safe)
+                await TG.client.forward_messages(entity=int(item["chat_id"]), messages=[ids[0]],
+                                                 from_peer=int(cid))
                 self.eng["processed"] += 1
                 self.eng["last_event"] = f"posted ▸ {item['channel']}"
             except FloodWaitError as fw:
@@ -524,31 +599,34 @@ class SourceMonitor:
         self.attached_client = None
 
     def configured(self):
-        src = self.m.get("source") or os.getenv("MONITOR_SOURCE", "").strip() or None
-        dst = self.m.get("destination") or os.getenv("MONITOR_DESTINATION", "").strip() or None
-        return src, dst
+        return cfg_monitor()
 
     async def start(self, params, origin):
         connected, _ = TG.status()
         if not connected:
             return {"ok": False, "lines": ["TELEGRAM DISCONNECTED ▸ pehle connect karo"]}
-        src = params.get("source") or self.m.get("source") or os.getenv("MONITOR_SOURCE", "").strip()
-        dst = params.get("destination") or self.m.get("destination") or os.getenv("MONITOR_DESTINATION", "").strip()
+        src = params.get("source") or cfg_monitor()[0]
+        dst = params.get("destination") or cfg_monitor()[1]
         if not src or not dst:
             return {"ok": False, "lines": [
                 "SOURCE NOT CONFIGURED ▸ monitoring ke liye source aur destination chahiye:",
-                "  env: MONITOR_SOURCE=@source_channel  MONITOR_DESTINATION=@output_channel",
+                "  web: Source Configuration panel se save karo",
+                "  env: MONITOR_SOURCE=@source  MONITOR_DESTINATION=@output",
                 "  ya command me: '/AI @source ko monitor karo, @output par bhejo'"]}
         try:
             src_ent = await resolve_chat(src)
             dst_ent = await resolve_chat(dst)
         except Exception as e:
-            return {"ok": False, "lines": [f"ENTITY ERROR ▸ source/destination resolve nahi hua ({type(e).__name__}) — @username check karo"]}
-        kws = params.get("keywords")
-        if kws:
-            self.m["keywords"] = kws
+            return {"ok": False, "lines": [f"ENTITY ERROR ▸ source/destination resolve nahi hua ({type(e).__name__})"]}
+        if params.get("keywords"):
+            self.m["keywords"] = params["keywords"]
         self.m.update({"active": True, "source": src, "destination": dst})
-        if not self.m.get("last_message_id"):  # baseline: don't repost old messages
+        # sync into runtime config so the web panel reflects it
+        cfg = runtime_store.load()
+        cfg["monitor_source"], cfg["monitor_destination"] = str(src), str(dst)
+        cfg["updated_at"] = int(time.time())
+        runtime_store.save_bg(cfg)
+        if not self.m.get("last_message_id"):
             latest = await TG.client.get_messages(src_ent, limit=1)
             self.m["last_message_id"] = latest[0].id if latest and latest[0] else 0
         await self.attach(TG.client)
@@ -557,15 +635,15 @@ class SourceMonitor:
             self.m["task_id"] = TASKS.register("MON", f"Source monitor {src} -> {dst}",
                                                stop_fn=self._task_stop, reset_fn=self.reset)["id"]
         state_store.save_bg(STATE)
-        safe_log("CMD", "MONITOR", f"Started ▸ {src} -> {dst} ▸ event-based listener")
+        safe_log("CMD", "MONITOR", f"Started ▸ {src} -> {dst} ▸ event-based")
         return {"lines": [
-            f"SOURCE MONITORING STARTED (event-based — fastest mode)",
+            "SOURCE MONITORING STARTED (event-based — fastest mode)",
             f"Task ID: {self.m['task_id']}",
             f"Source      ▸ {src}",
             f"Destination ▸ {dst}",
             f"Keywords    ▸ {', '.join(self.m['keywords'])}",
-            f"Baseline    ▸ last message id {self.m['last_message_id']} (purane messages repost nahi honge)",
-            "Har naya matching message ka exact source text formatted hokar destination par jayega."]}
+            f"Baseline    ▸ last message id {self.m['last_message_id']} (purane repost nahi honge)",
+            "Har naya matching message ka exact source text destination par jayega."]}
 
     async def _task_stop(self):
         await self.stop({}, "task")
@@ -580,7 +658,7 @@ class SourceMonitor:
         self.m["last_event"] = "stopped by operator"
         state_store.save_bg(STATE)
         safe_log("CMD", "MONITOR", "Stopped cleanly")
-        return {"lines": [f"MONITOR STOPPED ▸ task {tid or '-'}: STOPPED", "State persistent hai — 'monitor start' se wapas resume hoga"]}
+        return {"lines": [f"MONITOR STOPPED ▸ task {tid or '-'}: STOPPED", "State persistent — 'monitor start' se resume hoga"]}
 
     async def reset(self, params=None, origin="task"):
         self.m["last_message_id"] = 0
@@ -595,7 +673,7 @@ class SourceMonitor:
                     pass
         state_store.save_bg(STATE)
         safe_log("CMD", "MONITOR", f"Reset ▸ baseline {self.m['last_message_id']}")
-        return {"lines": [f"MONITOR RESET ▸ baseline message id {self.m['last_message_id']} ▸ counters zero"]}
+        return {"lines": [f"MONITOR RESET ▸ baseline id {self.m['last_message_id']} ▸ counters zero"]}
 
     def status_lines(self):
         src, dst = self.configured()
@@ -616,8 +694,7 @@ class SourceMonitor:
             self.worker = asyncio.get_running_loop().create_task(self._work())
 
     async def attach(self, client):
-        """Register NewMessage listener on the (single) client; re-attach after reconnect."""
-        if not TELETHON_OK or self.attached_client is client:
+        if not TELETHON_OK or self.attached_client is client or client is None:
             return
         self.attached_client = client
         mon = self
@@ -630,18 +707,17 @@ class SourceMonitor:
                 src, _dst = mon.configured()
                 if not src:
                     return
-                chat_id = event.chat_id
-                if str(chat_id) != str(src).lstrip("@") and f"@{chat_id}" != str(src):
-                    ent = event.chat
-                    uname = getattr(ent, "username", None)
-                    eid = getattr(ent, "id", None)
-                    if str(eid) != str(src).lstrip("-100").lstrip("-") and uname != str(src).lstrip("@"):
-                        return
+                ent = event.chat
+                uname = getattr(ent, "username", None)
+                eid = getattr(ent, "id", None)
+                ref = str(src).lstrip("@").lstrip("-100").lstrip("-")
+                if str(eid) != ref and uname != ref:
+                    return
                 msg = event.message
                 if not msg or not getattr(msg, "text", None):
                     return
                 if msg.id <= (mon.m.get("last_message_id") or 0):
-                    return  # duplicate guard
+                    return
                 await mon.queue.put(msg)
                 mon.ensure_worker()
             except Exception as e:
@@ -656,27 +732,24 @@ class SourceMonitor:
                 log.warning("FloodWait %ss in monitor — waiting exact delay", fw.seconds)
                 safe_log("WARN", "MONITOR", f"FloodWait {fw.seconds}s — exact delay honoured")
                 await asyncio.sleep(fw.seconds)
-                await self._process(msg)  # retry once after exact wait
+                await self._process(msg)
             except Exception as e:
                 log.error("monitor process error: %s", type(e).__name__)
                 safe_log("ERROR", "MONITOR", f"process error ({type(e).__name__}) — continuing")
 
     async def _process(self, msg):
         self.m["last_message_id"] = max(self.m.get("last_message_id") or 0, msg.id)
-        src, dst = self.configured()
+        _src, dst = self.configured()
         parsed = parse_source_text(msg.text or "", self.m["keywords"])
         body = format_update_text(parsed["body"])
         await TG.client.send_message(await resolve_chat(dst), body)
         self.m["processed"] = self.m.get("processed", 0) + 1
         self.m["last_event"] = f"update sent ▸ id {msg.id} {'(keyword match)' if parsed['matched'] else '(full text)'}"
         state_store.save_bg(STATE)
-        safe_log("OK", "MONITOR", f"Update id {msg.id} -> {dst} {'(keywords)' if parsed['matched'] else '(full)'}")
+        safe_log("OK", "MONITOR", f"Update id {msg.id} -> {dst}")
 
 MONITOR = SourceMonitor()
 
-# ----------------------------------------------------------------------------
-# Source message helpers — no fabrication: only real Telegram-provided text
-# ----------------------------------------------------------------------------
 def parse_source_text(text, keywords):
     lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
     kws = [k.lower() for k in (keywords or DEFAULT_KEYWORDS)]
@@ -693,9 +766,41 @@ def format_update_text(body):
     return f"UPDATE ▸\n{body}\n— via JARVIS · {ts}"
 
 # ============================================================================
-# NLU — intent classification + parameter extraction + condition handling.
-# NOT phrase tables: lexicon scoring over clause segments, multi-step aware.
+# NLU — fuzzy spell-correction + intent classification + params + conditions
 # ============================================================================
+def _lev(a, b):
+    """Levenshtein distance (small tokens only)."""
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 3 or la > 14 or lb > 14:
+        return 9
+    prev = list(range(lb + 1))
+    for i in range(1, la + 1):
+        cur = [i]
+        for j in range(1, lb + 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1])))
+        prev = cur
+    return prev[lb]
+
+LEV_WORDS = ("channel", "channels", "cross", "folder", "folders", "monitor", "task", "status",
+             "admin", "user", "message", "messages", "search", "start", "stop", "pause", "resume",
+             "reset", "scheduler", "schedule", "dead", "inactive", "account", "saved", "recent",
+             "diagnostics", "help", "latest", "config", "list", "update")
+
+def fuzzy_norm(t):
+    """BUG FIX 6: spelling-tolerant lexicon ('cros'->cross, 'chanel'->channel, 'usr'->user)."""
+    out = []
+    for tok in t.split(" "):
+        if len(tok) < 3 or tok.startswith("@") or any(ch.isdigit() for ch in tok) or tok in LEV_WORDS:
+            out.append(tok)
+            continue
+        best = min(LEV_WORDS, key=lambda w: _lev(tok, w))
+        d = _lev(tok, best)
+        threshold = 2 if len(tok) >= 5 else 1
+        out.append(best if d <= threshold and abs(len(tok) - len(best)) <= 3 else tok)
+    return " ".join(out)
+
 @dataclass
 class Step:
     tool: str
@@ -708,17 +813,17 @@ class Plan:
     unsupported: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     provider: str = "LOCAL"
-    needs: list = field(default_factory=list)   # missing-param prompts
+    needs: list = field(default_factory=list)
 
 V_START  = ("start", "shuru", "chalu", "chalao", "chala", "on", "lagao", "begin", "shuruaat", "kr do", "kar do")
-V_STOP   = ("stop", "band", "bandh", "rok", "ruko", "off", "band kar", "band kar do", "rok do")
-V_PAUSE  = ("pause", "hold", "wait kar", "ruk jao", "thahro", "temporary ruk")
+V_STOP   = ("stop", "band", "bandh", "rok", "ruko", "off", "rok do")
+V_PAUSE  = ("pause", "hold", "wait kar", "ruk jao", "thahro")
 V_RESUME = ("resume", "continue", "wapas chalu", "phir chalu", "phir se chalu", "unpause")
 V_RESET  = ("reset", "clear", "saaf", "zero", "fresh")
 V_STATUS = ("status", "stithi", "batao", "kaisa", "kya haal", "report", "dikhao", "dikha")
 V_CHECK  = ("check", "dekho", "inspect", "jaanch", "batao", "details", "karo", "dikhao", "dikha")
 V_CANCEL = ("cancel", "hatao", "abort")
-V_CONFIG = ("config", "setting", "setup dikhao", "configuration")
+V_CONFIG = ("config", "setting", "configuration")
 V_MON    = ("monitor", "watch", "nazar", "track", "follow", "toss line", "result line", "source line",
             "fastest update", "fast update", "jaldi update", "instant update", "live update")
 V_SEND   = ("bhejo", "bhej", "send", "forward", "copy paste", "copy karke", "daal do", "post")
@@ -726,8 +831,8 @@ V_FETCH  = ("latest", "last message", "naya message", "recent message", "fetch",
 
 CROSS_T  = ("cross", "engine", "promotion", "promo")
 SCHED_T  = ("scheduler", "schedule", "job")
-MON_T    = ("monitor", "monitoring", "source watch", "watcher")
-TASK_T   = ("task", "jo chal raha", "jo task", "running task", "ye wala", "usko")
+MON_T    = ("monitor", "monitoring", "watcher")
+TASK_T   = ("task", "jo chal raha", "jo task", "running task", "usko")
 
 def has(t, words):
     return any(w in t for w in words)
@@ -750,34 +855,29 @@ def extract(t, origin):
     km = re.search(r"(?:keywords?|shabd)\s*[:=]?\s*([a-zA-Z, ]+)$", t)
     if km:
         p["keywords"] = [k.strip() for k in km.group(1).split(",") if k.strip()][:8]
-    # two-chat pattern:  "@a ko monitor karo @b par bhejo"
     um = re.findall(r"@([a-zA-Z0-9_]{3,32})", t)
     if len(um) >= 2 and has(t, V_MON):
         p["source"], p["destination"] = "@" + um[0], "@" + um[1]
     elif len(um) == 1 and has(t, V_MON):
-        if has(t, V_SEND):
-            p["destination"] = "@" + um[0]
-        else:
-            p["source"] = "@" + um[0]
+        p["destination" if has(t, V_SEND) else "source"] = "@" + um[0]
     ts, label = parse_rel_time(t)
     if ts:
         p["run_at"], p["label"] = ts, label
     return p
 
 def is_condition_clause(t):
-    return has(t, ("toss", "lekin", "but", "mat karna", "mat kar", "wait karna", "dhyaan")) and not has(t, ("start", "stop", "band", "chalu", "monitor", "status"))
+    return has(t, ("toss", "lekin", "but", "mat karna", "mat kar", "wait karna", "dhyaan")) \
+        and not has(t, ("start", "stop", "band", "chalu", "monitor", "status"))
 
 def classify(raw, origin):
-    """Structured execution plan from mixed Hindi/Hinglish/English text."""
     t = re.sub(r"^\s*\/?(ai|jarvis|devil)\b[\s,:.-]*", "", raw.strip().lower())
     t = re.sub(r"\s+", " ", t)
+    t = fuzzy_norm(t)   # BUG FIX 6
     plan = Plan()
     if not t:
         plan.steps.append(Step("jarvis_help")); return plan
-
     ctx = ctx_get(origin)
 
-    # ---------- legacy /AI UPPERCASE fast-path (console compatibility) ----------
     legacy = {
         "STATUS": ("jarvis_status", {}), "ACCOUNT": ("telegram_account", {}),
         "FOLDERS CHANNELS": ("telegram_folders", {"include_channels": True}),
@@ -799,26 +899,23 @@ def classify(raw, origin):
     if m_can:
         plan.steps.append(Step("scheduler_cancel", {"id": m_can.group(1) or ""})); return plan
 
-    # ---------- split into clauses (multi-step) ----------
     clauses = [c.strip() for c in re.split(
         r"[,;.!?]|(?:\baur\b)|(?:\bbut\b)|(?:\blekin\b)|(?:\band then\b)|(?:\bthen\b)|(?:\bphir\b)|(?:\bfir\b)", t) if c.strip()]
     if not clauses:
         clauses = [t]
 
-    pending_conditions = []
+    pending = []
     for c in clauses:
-        # pure condition clause -> attach to previous step (or note globally)
         if is_condition_clause(c) and plan.steps:
             if "toss" in c:
                 plan.unsupported.append(
-                    "Toss-time auto-pause abhi supported nahi hai — toss ka koi official live source configured nahi. "
-                    "Manual control supported hai: '/AI cross pause' aur '/AI cross resume'.")
-            elif has(c, ("wait karna", "mat karna", "mat kar")):
+                    "Toss-time auto-pause abhi supported nahi hai — toss ka official live source configured nahi. "
+                    "Manual: '/AI cross pause' / '/AI cross resume'.")
+            else:
                 plan.unsupported.append(
                     "Conditional wait/trigger abhi supported nahi hai — manual pause/stop commands available hain.")
             continue
 
-        # "@output par bhejo" right after a monitor step -> attach destination
         if plan.steps and plan.steps[-1].tool == "monitor_source" and has(c, V_SEND) and re.search(r"@", c):
             mm = re.search(r"@([a-zA-Z0-9_]{3,32})", c)
             plan.steps[-1].params["destination"] = "@" + mm.group(1)
@@ -827,23 +924,18 @@ def classify(raw, origin):
         tgt = target_of(c)
         p = extract(c, origin)
 
-        # time-boxed engine control -> scheduler
         if p.get("run_at") and has(c, V_START) and not has(c, V_STOP):
-            plan.steps.append(Step("scheduler_start", {"run_at": p["run_at"], "label": p["label"]}))
-            continue
+            plan.steps.append(Step("scheduler_start", {"run_at": p["run_at"], "label": p["label"]})); continue
         if p.get("run_at") and has(c, V_STOP):
-            plan.steps.append(Step("scheduler_stop", {"run_at": p["run_at"], "label": p["label"]}))
-            continue
+            plan.steps.append(Step("scheduler_stop", {"run_at": p["run_at"], "label": p["label"]})); continue
 
-        # ----- monitoring / update workflow -----
-        if has(c, V_MON) and (has(c, V_START) or has(c, ("karna", "karo", "kr", "shuru", "chalu", "lgao", "lagao"))):
+        if has(c, V_MON) and (has(c, V_START) or has(c, ("karna", "karo", "kr", "shuru", "chalu", "lagao"))):
             plan.steps.append(Step("monitor_source", {k: v for k, v in p.items() if k in ("source", "destination", "keywords")}))
             if has(c, ("fastest", "jaldi", "instant", "fast")):
-                plan.notes.append("Fast mode: event-based Telegram listener use hoga (polling nahi) — ye supported hai.")
+                plan.notes.append("Fast mode: event-based Telegram listener (polling nahi) — supported.")
             continue
         if has(c, V_MON) and has(c, V_STOP):
-            plan.steps.append(Step("task_stop", {"kind": "MON"}))
-            continue
+            plan.steps.append(Step("task_stop", {"kind": "MON"})); continue
         if ("toss line" in c or "result line" in c or "source line" in c or "fastest update" in c or "fast update" in c) and not plan.steps:
             if has(c, ("copy", "bhejo", "bhej", "send")):
                 plan.steps.append(Step("copy_source_text", p.get("ref") and {"source": "@" + p["ref"]} or {}))
@@ -859,41 +951,31 @@ def classify(raw, origin):
                 plan.steps.append(Step("fetch_latest_source_message", p.get("ref") and {"source": "@" + p["ref"]} or {}))
             continue
         if has(c, ("ka update", "update bhejo", "format karke", "template")) and has(c, V_FETCH + V_SEND):
-            plan.steps.append(Step("format_update", {}))
-            continue
+            plan.steps.append(Step("format_update", {})); continue
 
-        # ----- cross engine -----
         if tgt == "cross" or (tgt is None and has(c, CROSS_T)):
-            if has(c, V_PAUSE):
-                plan.steps.append(Step("cross_pause", {})); continue
-            if has(c, V_RESUME):
-                plan.steps.append(Step("cross_resume", {})); continue
-            if has(c, V_RESET):
-                plan.steps.append(Step("cross_reset", {})); continue
-            if has(c, V_CONFIG):
-                plan.steps.append(Step("cross_config", {})); continue
-            if has(c, V_STOP):
-                plan.steps.append(Step("cross_stop", {})); continue
-            if has(c, V_START):
-                plan.steps.append(Step("cross_start", {})); continue
+            if has(c, V_PAUSE):   plan.steps.append(Step("cross_pause", {})); continue
+            if has(c, V_RESUME):  plan.steps.append(Step("cross_resume", {})); continue
+            if has(c, V_RESET):   plan.steps.append(Step("cross_reset", {})); continue
+            if has(c, V_CONFIG):  plan.steps.append(Step("cross_config", {})); continue
+            if has(c, V_STOP):    plan.steps.append(Step("cross_stop", {})); continue
+            if has(c, V_START):   plan.steps.append(Step("cross_start", {})); continue
             if has(c, V_STATUS + ("ka ",)):
                 plan.steps.append(Step("cross_status", {})); continue
 
-        # ----- scheduler / tasks -----
         if tgt == "scheduler" and has(c, V_STATUS + V_CHECK):
             plan.steps.append(Step("scheduler_status", {})); continue
         if has(c, V_CANCEL) and ("job" in c or p.get("id")) and tgt != "cross":
             plan.steps.append(Step("scheduler_cancel", {"id": p.get("id", "")})); continue
         if tgt == "task" and has(c, V_STOP + V_CANCEL):
             plan.steps.append(Step("task_stop", {"id": p.get("id", "")})); continue
-        if tgt == "task" and (has(c, V_RESET)):
+        if tgt == "task" and has(c, V_RESET):
             plan.steps.append(Step("task_reset", {"id": p.get("id", "")})); continue
         if tgt == "task" and has(c, V_STATUS):
             plan.steps.append(Step("task_status", {})); continue
         if has(c, ("task status", "tasks dikhao", "kya chal raha", "kya kya chal raha")):
             plan.steps.append(Step("task_status", {})); continue
 
-        # ----- channels / dialogs -----
         if "folder" in c:
             plan.steps.append(Step("telegram_folders", {"include_channels": has(c, ("channel", "channels", "list", "andar", "jitne", "saare", "dikhao"))})); continue
         if has(c, ("dialog", "chats list", "conversations")):
@@ -904,22 +986,19 @@ def classify(raw, origin):
             plan.steps.append(Step("telegram_dead_channel_scan", {})); continue
         if "age" in c or "old" in c or "purana" in c or "kab bana" in c or "kitna time" in c:
             pr = p.get("ref") or ctx.get("last_channel")
-            step = Step("telegram_channel_age_estimate", {"channel": pr or ""})
-            if not pr:
-                plan.needs.append("channel")
-            plan.steps.append(step); continue
+            plan.steps.append(Step("telegram_channel_age_estimate", {"channel": pr or ""}))
+            if not pr: plan.needs.append("channel")
+            continue
         if has(c, ("activ", "activity")) or "active hai" in c:
             pr = p.get("ref") or ctx.get("last_channel")
-            step = Step("telegram_channel_activity", {"channel": pr or ""})
-            if not pr:
-                plan.needs.append("channel")
-            plan.steps.append(step); continue
+            plan.steps.append(Step("telegram_channel_activity", {"channel": pr or ""}))
+            if not pr: plan.needs.append("channel")
+            continue
         if "channel" in c and has(c, V_CHECK + ("info",)):
             pr = p.get("ref") or ctx.get("last_channel")
-            step = Step("telegram_channel_info", {"channel": pr or ""})
-            if not pr:
-                plan.needs.append("channel")
-            plan.steps.append(step); continue
+            plan.steps.append(Step("telegram_channel_info", {"channel": pr or ""}))
+            if not pr: plan.needs.append("channel")
+            continue
         if has(c, ("recent message", "messages padho", "messages dikhao", "messages check")):
             plan.steps.append(Step("telegram_recent_messages", {"channel": p.get("ref") or ctx.get("last_channel") or ""})); continue
         if has(c, ("search", "dhundo", "dhundho", "khojo")):
@@ -928,28 +1007,25 @@ def classify(raw, origin):
         if "saved message" in c:
             plan.steps.append(Step("telegram_saved_messages", {})); continue
 
-        # ----- users / admin -----
         if "admin" in c and has(c, ("permissions", "adikar", "rights", "kar sakta", "check")):
             plan.steps.append(Step("admin_check_permissions", {"channel": p.get("ref") or ctx.get("last_channel") or ""})); continue
-        if "admin" in c and has(c, ("de do", "bana", "dena", "banana", "promote", "do"))and "de-admin" not in c:
-            um = re.findall(r"@([a-zA-Z0-9_]{3,32})", c)
-            pr = {"user": um[-1] if um else "", "channel": ctx.get("last_channel", "")}
-            if um and not pr["channel"]:
-                pr["channel"] = um[0] if len(um) > 1 else ""
-            plan.steps.append(Step("admin_promote", pr))
-            if not pr["user"]:
-                plan.needs.append("user")
-            continue
         if "admin" in c and has(c, ("hatao", "remove", "demote", "nikalo")):
             um = re.findall(r"@([a-zA-Z0-9_]{3,32})", c)
             plan.steps.append(Step("admin_demote", {"user": um[-1] if um else "", "channel": ctx.get("last_channel", "")})); continue
-        if ("user" in c) and has(c, V_CHECK + ("info", "whois", "kaun")):
+        if "admin" in c and has(c, ("de do", "bana", "dena", "banana", "promote", "do")):
+            um = re.findall(r"@([a-zA-Z0-9_]{3,32})", c)
+            pr = {"user": um[-1] if um else "", "channel": ctx.get("last_channel", "")}
+            if len(um) > 1 and not pr["channel"]:
+                pr["channel"] = um[0]
+            plan.steps.append(Step("admin_promote", pr))
+            if not pr["user"]: plan.needs.append("user")
+            continue
+        if "user" in c and has(c, V_CHECK + ("info", "whois", "kaun")):
             plan.steps.append(Step("telegram_user_info", {"user": p.get("ref") or ctx.get("last_user") or ""})); continue
         if has(c, ("permissions", "adhikar", "rights")) and "channel" in c:
             plan.steps.append(Step("telegram_permissions", {"channel": p.get("ref") or ctx.get("last_channel") or ""})); continue
 
-        # ----- jarvis system -----
-        if has(c, ("diagnostic",)):
+        if "diagnostic" in c:
             plan.steps.append(Step("jarvis_diagnostics", {})); continue
         if has(c, ("save state", "state save")):
             plan.steps.append(Step("jarvis_save_state", {})); continue
@@ -960,19 +1036,12 @@ def classify(raw, origin):
         if "account" in c or "mera telegram" in c:
             plan.steps.append(Step("telegram_account", {})); continue
 
-        # monitor status alias
-        if tgt == "monitor" and has(c, V_STATUS):
-            plan.steps.append(Step("fetch_latest_source_message", {})) if False else plan.steps.append(Step("task_status", {}))
-            continue
+        pending.append(c)
 
-        pending_conditions.append(c)
+    if pending and plan.steps:
+        for c in pending:
+            plan.notes.append(f"Is part ko map nahi kar paya: '{c[:60]}' — /AI HELP")
 
-    # leftover unmatched clauses -> note them; AI escalation happens upstream if zero steps
-    if pending_conditions and plan.steps:
-        for c in pending_conditions:
-            plan.notes.append(f"Is part ko map nahi kar paya: '{c[:60]}' — supported actions ke liye /AI HELP")
-
-    # dedupe: same tool from split clauses -> merge params (include_channels etc.)
     merged = []
     for s in plan.steps:
         prev = next((x for x in merged if x.tool == s.tool), None)
@@ -981,13 +1050,11 @@ def classify(raw, origin):
         else:
             merged.append(s)
     plan.steps = merged
-
-    if not plan.steps:
-        return plan  # caller may escalate to AI providers
     return plan
 
 # ----------------------------------------------------------------------------
-# AI provider chain — NLU escalation only (validated plan output, no execution)
+# AI provider chain — NLU escalation only. Per-provider status tracking.
+# BUG FIX 3: max_tokens set, graceful per-provider errors, never blocks tools.
 # ----------------------------------------------------------------------------
 class AIManager:
     PROVIDERS = [
@@ -1002,21 +1069,25 @@ class AIManager:
     def __init__(self):
         self.total = 0
         self.last_provider = "LOCAL"
+        self.provider_status = {n: "skipped" for n, *_ in self.PROVIDERS}
 
     def configured(self):
         return [n for n, k, *_ in self.PROVIDERS if os.getenv(k)] if httpx else []
 
+    def providers_view(self):
+        return [{"id": n, "configured": bool(os.getenv(k)) if httpx else False,
+                 "status": self.provider_status.get(n, "skipped"),
+                 "role": "PRIMARY" if i == 0 else f"FALLBACK {i}"}
+                for i, (n, k, *_m) in enumerate(self.PROVIDERS)]
+
     def prompt(self, text):
-        return (
-            "You are the NLU layer of JARVIS, a Telegram control assistant. Convert the user "
-            "instruction (English/Hindi/Hinglish, possibly multi-step) into ONE raw JSON object:\n"
-            '{"steps":[{"tool":"<tool name>","params":{...}}],'
-            '"unsupported":["<requested behavior with no tool>"],'
-            '"reply":"<one short line for the user>"}\n'
-            "You may ONLY use tools from this registry (never invent tools or params):\n"
-            + REG.summary_for_ai() +
-            "\nRules: raw JSON only. If nothing maps safely, use \"steps\":[] and explain in reply. "
-            "Never emit code, shell commands, or API calls.\nUSER: " + text)
+        return ("You are the NLU layer of JARVIS, a Telegram control assistant. Convert the user "
+                "instruction (English/Hindi/Hinglish, possibly multi-step) into ONE raw JSON object:\n"
+                '{"steps":[{"tool":"<tool name>","params":{...}}],'
+                '"unsupported":["<requested behavior with no tool>"],'
+                '"reply":"<one short line>"}\n'
+                "ONLY these tools (never invent):\n" + REG.summary_for_ai() +
+                "\nRaw JSON only. Unknown -> \"steps\":[] with explanation in reply. No code ever.\nUSER: " + text)
 
     async def _call(self, name, key, model, text):
         async with httpx.AsyncClient(timeout=10.0) as c:
@@ -1026,28 +1097,31 @@ class AIManager:
                        "OPENAI": "https://api.openai.com/v1/chat/completions",
                        "OPENROUTER": "https://openrouter.ai/api/v1/chat/completions"}[name]
                 r = await c.post(url, headers={"Authorization": f"Bearer {key}"},
-                                 json={"model": model, "messages": [{"role": "user", "content": msg}], "temperature": 0.1})
+                                 json={"model": model, "max_tokens": 600,
+                                       "messages": [{"role": "user", "content": msg}], "temperature": 0.1})
                 r.raise_for_status()
                 return r.json()["choices"][0]["message"]["content"]
             if name == "GEMINI":
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-                r = await c.post(url, json={"contents": [{"parts": [{"text": msg}]}]})
+                r = await c.post(url, json={"contents": [{"parts": [{"text": msg}]}],
+                                            "generationConfig": {"maxOutputTokens": 600}})
                 r.raise_for_status()
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             if name == "ANTHROPIC":
                 r = await c.post("https://api.anthropic.com/v1/messages",
                                  headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                                 json={"model": model, "max_tokens": 600, "messages": [{"role": "user", "content": msg}]})
+                                 json={"model": model, "max_tokens": 600,
+                                       "messages": [{"role": "user", "content": msg}]})
                 r.raise_for_status()
                 return r.json()["content"][0]["text"]
             r = await c.post(f"https://api-inference.huggingface.co/models/{model}",
-                             headers={"Authorization": f"Bearer {key}"}, json={"inputs": msg})
+                             headers={"Authorization": f"Bearer {key}"},
+                             json={"inputs": msg, "parameters": {"max_new_tokens": 600}})
             r.raise_for_status()
             out = r.json()
             return out[0]["generated_text"] if isinstance(out, list) else str(out)
 
     async def plan(self, text):
-        """Return validated Plan or None. Never raises."""
         for name, key_env, model_env, default_model in self.PROVIDERS:
             key = os.getenv(key_env)
             if not key or not httpx:
@@ -1056,33 +1130,133 @@ class AIManager:
                 blob = await self._call(name, key, os.getenv(model_env, default_model), text)
                 m = re.search(r"\{.*\}", blob, re.S)
                 if not m:
-                    raise ValueError("no JSON")
+                    raise ValueError("no JSON in provider reply")
                 obj = json.loads(m.group(0))
                 plan = Plan(provider=name)
                 for s in obj.get("steps") or []:
                     tool = str(s.get("tool", "")).strip()
                     prm = s.get("params") if isinstance(s.get("params"), dict) else {}
                     if tool not in REG.tools:
-                        plan.unsupported.append(f"AI ne unknown tool manga '{tool}' — registry me nahi hai, skip kiya")
+                        plan.unsupported.append(f"AI ne unknown tool manga '{tool}' — registry me nahi, skip")
                         continue
                     allowed = {p.name for p in REG.tools[tool].params}
-                    prm = {k: v for k, v in prm.items() if not allowed or k in allowed}
-                    plan.steps.append(Step(tool, prm))
+                    plan.steps.append(Step(tool, {k: v for k, v in prm.items() if not allowed or k in allowed}))
                 plan.unsupported += [str(u)[:200] for u in (obj.get("unsupported") or [])]
                 if obj.get("reply"):
                     plan.notes.append(str(obj["reply"])[:300])
                 self.total += 1
                 self.last_provider = name
+                self.provider_status[name] = "OK"
                 return plan
             except Exception as e:
+                self.provider_status[name] = f"FAIL:{type(e).__name__}"
                 log.warning("AI provider %s failed (%s) — trying next", name, type(e).__name__)
-                safe_log("WARN", "AI", f"Provider {name} failed ({type(e).__name__}) — failover")
+                safe_log("WARN", "AI", f"Provider {name} failed ({type(e).__name__}) — failover, local NLU stays live")
         return None
 
 AI = AIManager()
 
 # ----------------------------------------------------------------------------
-# Telegram manager — single client, session / phone+OTP / 2FA, Saved Messages
+# Dialog folders / channel analysis — PER-CLIENT helpers (multi-account safe)
+# BUG FIX 1: fully version-safe parsing, crash-proof
+# BUG FIX 2: tzinfo-safe age math
+# ----------------------------------------------------------------------------
+async def _scan_folders_client(client):
+    out = []
+    try:
+        filters = await client(functions.messages.GetDialogFiltersRequest())
+    except Exception as e:
+        log.warning("Dialog filters unavailable (%s)", type(e).__name__)
+        filters = []
+    try:
+        dialogs = [d async for d in client.iter_dialogs(limit=300)]
+    except Exception as e:
+        log.warning("Dialogs fetch failed (%s)", type(e).__name__)
+        dialogs = []
+
+    channels = [d for d in dialogs if getattr(d, "is_channel", False)]
+    peer_map = {}
+    for d in channels:
+        try:
+            peer_map[getattr(d.entity, "id", None)] = d
+        except Exception:
+            continue
+
+    for f in filters:
+        try:
+            raw_title = getattr(f, "title", None)
+            if raw_title is None:
+                continue
+            title = raw_title if isinstance(raw_title, str) else (getattr(raw_title, "text", None) or str(raw_title))
+            if not title or not str(title).strip():
+                continue
+            include = getattr(f, "include_peers", None) or []
+            chans = []
+            for p in include:
+                try:
+                    d = peer_map.get(getattr(p, "channel_id", None))
+                    if d:
+                        chans.append({"id": d.entity.id, "name": getattr(d.entity, "title", "Channel"),
+                                      "username": getattr(d.entity, "username", None)})
+                except Exception:
+                    continue
+            out.append({"name": str(title).upper(), "channels": chans})
+        except Exception as e:
+            log.warning("Folder parse skip (%s)", type(e).__name__)
+            continue
+
+    if not out and channels:
+        out.append({"name": "ALL CHANNELS", "channels": [
+            {"id": getattr(d.entity, "id", None), "name": getattr(d.entity, "title", "Channel"),
+             "username": getattr(d.entity, "username", None)} for d in channels]})
+    return out
+
+async def scan_folders():
+    connected, _ = TG.status()
+    if not connected:
+        return []
+    async with TG.lock:
+        return await _scan_folders_client(TG.client)
+
+async def scan_folders_for(account_ctx):
+    return await _scan_folders_client(account_ctx["client"])
+
+async def _analyze_channel_client(client, cid):
+    threshold = cfg_dead_threshold()
+    try:
+        msgs = await client.get_messages(int(cid), limit=1)
+        if not msgs or msgs[0] is None:
+            return "INACTIVE", "Empty history — koi post nahi mila", None
+        last = msgs[0].date
+        # BUG FIX 2: tzinfo None crash guard
+        now = datetime.now(last.tzinfo) if getattr(last, "tzinfo", None) else datetime.now(timezone.utc)
+        if getattr(last, "tzinfo", None) is None:
+            last = last.replace(tzinfo=timezone.utc)
+        age = now - last
+        iso = last.isoformat()
+        if age.days > threshold:
+            return "INACTIVE", f"{age.days} din se koi post nahi (threshold {threshold})", iso
+        return "ACTIVE", f"Last post {age.days}d pehle", iso
+    except FloodWaitError as fw:
+        log.warning("FloodWait %ss during scan — honouring exact delay", fw.seconds)
+        await asyncio.sleep(fw.seconds)
+        return "UNKNOWN", "Scan FloodWait se ruka — baad me retry", None
+    except RPCError as e:
+        name = type(e).__name__
+        if "Private" in name or "Forbidden" in name:
+            return "INACCESSIBLE", f"Messages read nahi kar sakte ({name})", None
+        return "RESTRICTED", f"Restricted access ({name})", None
+    except Exception as e:
+        return "UNKNOWN", f"Unclassified ({type(e).__name__})", None
+
+async def analyze_channel(cid):
+    return await _analyze_channel_client(TG.client, cid)
+
+async def analyze_channel_for(account_ctx, cid):
+    return await _analyze_channel_client(account_ctx["client"], cid)
+
+# ----------------------------------------------------------------------------
+# Telegram manager — PRIMARY account (session / phone+OTP / 2FA login)
 # ----------------------------------------------------------------------------
 LOGIN_TTL = 300
 CONFIRM_TTL = 90
@@ -1095,25 +1269,41 @@ class TelegramManager:
         self.lock = asyncio.Lock()
         self.pending = {}
 
-    async def _finalize(self, client):
-        me = await client.get_me()
+    def bind(self, client, meta):
+        """Point all tools/engine at this client (used for managed-account activation)."""
         self.client = client
         self.authorized = True
-        self.account = {
+        self.account = meta
+        STATE["account"] = meta
+        state_store.save_bg(STATE)
+        self._attach_listener(client)
+        MONITOR.attached_client = None
+        try:
+            asyncio.get_running_loop().create_task(MONITOR.attach(client))
+        except RuntimeError:
+            pass
+        safe_log("OK", "TELEGRAM", f"Active account -> @{meta.get('username')}")
+
+    async def _finalize(self, client):
+        me = await client.get_me()
+        meta = {
             "name": f"{me.first_name or ''} {me.last_name or ''}".strip() or "Telegram User",
             "username": getattr(me, "username", None) or "unknown",
             "user_id": me.id,
             "phone": ("+•••••" + str(me.phone)[-4:]) if getattr(me, "phone", None) else None,
             "connected_at": int(time.time()),
         }
-        STATE["account"] = self.account
+        self.client = client
+        self.authorized = True
+        self.account = meta
+        STATE["account"] = meta
         state_store.save_bg(STATE)
         self._attach_listener(client)
         await MONITOR.attach(client)
         if STATE["monitor"].get("active"):
             MONITOR.ensure_worker()
-        log.info("TELEGRAM authorized as @%s (%s)", self.account["username"], me.id)
-        safe_log("OK", "TELEGRAM", f"Authorized as @{self.account['username']} (ID {me.id})")
+        log.info("TELEGRAM authorized as @%s (%s)", meta["username"], me.id)
+        safe_log("OK", "TELEGRAM", f"Authorized as @{meta['username']} (ID {me.id})")
         return client.session.save()
 
     async def _replace_client(self, client):
@@ -1237,7 +1427,7 @@ class TelegramManager:
                 session = await self._finalize(p["client"])
                 self.pending.pop(login_id, None)
                 return True, {"account": self.account, "session_string": session,
-                              "message": "2FA accepted — authorized. SESSION STRING abhi copy karo (ek baar hi dikhaya jayega)."}
+                              "message": "2FA accepted — authorized. SESSION STRING abhi copy karo (ek baar)."}
             except PasswordHashInvalidError:
                 return False, "INVALID 2FA PASSWORD — dobara try karo"
             except FloodWaitError as fw:
@@ -1273,7 +1463,7 @@ class TelegramManager:
         async def _on_saved(event):
             try:
                 sender = int(event.sender_id or 0)
-                admins = authorized_admin_ids(mgr.account)
+                admins = authorized_admin_ids()
                 if sender not in admins:
                     log.warning("Ignoring command from non-admin id %s (fail closed)", sender)
                     safe_log("WARN", "AUTH", f"Ignored message from non-admin {sender} (fail closed)")
@@ -1295,78 +1485,191 @@ class TelegramManager:
                 log.error("Saved-messages handler error: %s", type(e).__name__)
 
 TG = TelegramManager()
-PENDING_CONFIRM = {}   # origin -> {plan, lines(summary), expires}
 
-# ----------------------------------------------------------------------------
-# Folder scanning + channel activity (bounded, FloodWait-safe)
-# ----------------------------------------------------------------------------
-async def scan_folders():
-    connected, _ = TG.status()
-    if not connected:
-        return []
-    out = []
-    async with TG.lock:
+def authorized_admin_ids():
+    raw = os.getenv("AUTHORIZED_ADMINS", "").strip()
+    ids = {int(x) for x in re.split(r"[,\s]+", raw) if x.strip().isdigit()}
+    if TG.account:
+        ids.add(int(TG.account["user_id"]))
+    for acc in ACCOUNTS.accounts.values():
+        if acc["meta"].get("user_id"):
+            ids.add(int(acc["meta"]["user_id"]))
+    return ids
+
+PENDING_CONFIRM = {}
+
+# ============================================================================
+# ACCOUNT MANAGER — up to 2 encrypted accounts, one active at a time
+# ============================================================================
+class AccountManager:
+    MAX_ACCOUNTS = 2
+
+    def __init__(self):
+        self.accounts = {}
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        for a in accounts_store.load().get("accounts", []):
+            self.accounts[a["id"]] = {"meta": a, "client": None,
+                                      "lock": asyncio.Lock(), "authorized": False}
+
+    def _persist(self):
+        accounts_store.save_bg({"accounts": [v["meta"] for v in self.accounts.values()]})
+
+    def persistent(self):
+        return bool(_get_fernet())
+
+    async def add_account(self, label, api_id, api_hash, session_string):
+        if len(self.accounts) >= self.MAX_ACCOUNTS:
+            return False, f"Max {self.MAX_ACCOUNTS} accounts allowed"
+        if not TELETHON_OK:
+            return False, "telethon not installed"
+        client = None
         try:
-            filters = await TG.client(functions.messages.GetDialogFiltersRequest())
+            client = TelegramClient(StringSession(session_string.strip()), api_id, api_hash.strip())
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return False, "Session invalid — expired ya revoked"
+            me = await client.get_me()
+        except (ValueError, EOFError, struct.error):
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+            return False, "SESSION STRING CORRUPT — fresh export karo"
+        except FloodWaitError as fw:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+            return False, f"FloodWait — {fw.seconds}s baad retry (exact delay honoured)"
         except Exception as e:
-            log.warning("Dialog filters unavailable (%s)", type(e).__name__)
-            filters = []
-        dialogs = [d async for d in TG.client.iter_dialogs(limit=300)]
-    channels = [d for d in dialogs if getattr(d, "is_channel", False)]
-    peer_map = {getattr(d.entity, "id", None): d for d in channels}
-    for f in filters:
-        title = getattr(getattr(f, "title", None), "text", None) or getattr(f, "title", None)
-        include = getattr(f, "include_peers", None)
-        if not title or not isinstance(title, str) or include is None:
-            continue
-        chans = []
-        for p in include:
-            d = peer_map.get(getattr(p, "channel_id", None))
-            if d:
-                chans.append({"id": d.entity.id, "name": getattr(d.entity, "title", "Channel"),
-                              "username": getattr(d.entity, "username", None)})
-        out.append({"name": title.upper(), "channels": chans})
-    if not out and channels:
-        out.append({"name": "ALL CHANNELS", "channels": [
-            {"id": d.entity.id, "name": getattr(d.entity, "title", "Channel"),
-             "username": getattr(d.entity, "username", None)} for d in channels]})
-    return out
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+            return False, f"Connection failed: {type(e).__name__} — API ID/HASH/session verify karo"
+        acc_id = f"acc_{uuid.uuid4().hex[:6]}"
+        enc_session = encrypt_str(session_string)
+        enc_hash = encrypt_str(api_hash)
+        meta = {"id": acc_id, "label": label, "api_id": api_id,
+                "api_hash_enc": enc_hash, "session_enc": enc_session,
+                "username": getattr(me, "username", None) or "unknown", "user_id": me.id,
+                "active": False, "persisted": bool(enc_session), "config": {},
+                "created_at": int(time.time())}
+        self.accounts[acc_id] = {"meta": meta, "client": client, "lock": asyncio.Lock(), "authorized": True}
+        self._persist()
+        TG._attach_listener(client)
+        await MONITOR.attach(client)
+        safe_log("OK", "ACCOUNT", f"Added {acc_id} (@{meta['username']}) — persisted={'yes' if enc_session else 'memory-only (set JARVIS_SECRET_KEY)'}")
+        warn = None if enc_session else "JARVIS_SECRET_KEY set nahi — ye account restart tak hi rahega"
+        return True, {"id": acc_id, "username": meta["username"], "user_id": me.id, "warning": warn}
 
-async def analyze_channel(cid):
-    threshold = int(os.getenv("DEAD_THRESHOLD_DAYS", "30"))
-    try:
-        msgs = await TG.client.get_messages(int(cid), limit=1)
-        if not msgs or msgs[0] is None:
-            return "INACTIVE", "Empty history — koi post nahi mila", None
-        last = msgs[0].date
-        age = datetime.now(last.tzinfo) - last
-        iso = last.isoformat()
-        if age.days > threshold:
-            return "INACTIVE", f"{age.days} din se koi post nahi (threshold {threshold})", iso
-        return "ACTIVE", f"Last post {age.days}d pehle", iso
-    except FloodWaitError as fw:
-        log.warning("FloodWait %ss during scan — honouring exact delay", fw.seconds)
-        await asyncio.sleep(fw.seconds)
-        return "UNKNOWN", "Scan FloodWait se ruka — baad me retry", None
-    except RPCError as e:
-        name = type(e).__name__
-        if "Private" in name or "Forbidden" in name:
-            return "INACCESSIBLE", f"Messages read nahi kar sakte ({name})", None
-        return "RESTRICTED", f"Restricted access ({name})", None
-    except Exception as e:
-        return "UNKNOWN", f"Unclassified ({type(e).__name__})", None
+    async def remove_account(self, acc_id):
+        acc = self.accounts.get(acc_id)
+        if not acc:
+            return False, "Account not found"
+        was_active = acc["meta"].get("active")
+        if acc.get("client"):
+            try:
+                await acc["client"].disconnect()
+            except Exception:
+                pass
+        self.accounts.pop(acc_id, None)
+        if was_active:
+            TG.client = None
+            TG.authorized = False
+            TG.account = None
+            STATE["account"] = None
+            state_store.save_bg(STATE)
+        self._persist()
+        safe_log("WARN", "ACCOUNT", f"Removed {acc_id}")
+        return True, "Removed"
+
+    async def activate(self, acc_id):
+        acc = self.accounts.get(acc_id)
+        if not acc:
+            return False, "Account not found"
+        if not (acc.get("client") and acc["client"].is_connected() and acc.get("authorized")):
+            return False, "Account not connected — session reconnect failed (restart ya re-add karo)"
+        for aid, a in self.accounts.items():
+            a["meta"]["active"] = (aid == acc_id)
+        self._persist()
+        meta = dict(acc["meta"])
+        TG.bind(acc["client"], {"name": meta.get("label") or "Telegram User", "username": meta["username"],
+                                "user_id": meta["user_id"], "phone": None, "connected_at": int(time.time())})
+        safe_log("OK", "ACCOUNT", f"Activated {acc_id} (@{meta['username']}) — saare tools ab is account par")
+        return True, f"Activated @{meta['username']}"
+
+    def get_active(self):
+        for acc in self.accounts.values():
+            if acc["meta"].get("active"):
+                return acc
+        return None
+
+    def view(self):
+        out = []
+        for aid, acc in self.accounts.items():
+            m = acc["meta"]
+            out.append({"id": aid, "label": m.get("label") or "Account", "username": m.get("username"),
+                        "user_id": m.get("user_id"), "active": bool(m.get("active")),
+                        "persisted": bool(m.get("persisted")),
+                        "authorized": bool(acc.get("authorized")),
+                        "connected": bool(acc.get("client") and acc["client"].is_connected())})
+        return out
+
+    async def reconnect_all(self):
+        if not self.accounts:
+            return 0
+        n = 0
+        for acc in self.accounts.values():
+            meta = acc["meta"]
+            try:
+                api_hash = decrypt_str(meta.get("api_hash_enc"))
+                session = decrypt_str(meta.get("session_enc"))
+                if not api_hash or not session:
+                    safe_log("WARN", "ACCOUNT", f"{meta['id']} reconnect skip — encrypted session unavailable (JARVIS_SECRET_KEY)")
+                    continue
+                client = TelegramClient(StringSession(session), int(meta["api_id"]), api_hash)
+                await client.connect()
+                if await client.is_user_authorized():
+                    acc["client"] = client
+                    acc["authorized"] = True
+                    TG._attach_listener(client)
+                    await MONITOR.attach(client)
+                    n += 1
+                    log.info("Reconnected account %s (@%s)", meta["id"], meta.get("username"))
+                else:
+                    await client.disconnect()
+            except Exception as e:
+                log.warning("Reconnect failed for %s: %s", meta["id"], type(e).__name__)
+        active = self.get_active()
+        if active and active.get("client") and active.get("authorized"):
+            meta = dict(active["meta"])
+            TG.bind(active["client"], {"name": meta.get("label") or "Telegram User",
+                                       "username": meta["username"], "user_id": meta["user_id"],
+                                       "phone": None, "connected_at": int(time.time())})
+        return n
+
+ACCOUNTS = AccountManager()
 
 # ============================================================================
-# TELEGRAM TOOLS (registry entries)
+# TELEGRAM TOOLS
 # ============================================================================
-
 async def t_telegram_status(p, o):
     connected, authed = TG.status()
-    return {"lines": ["TELEGRAM STATUS", bar,
-                      f"Connection ▸ {'LIVE' if connected else 'DISCONNECTED'}",
-                      f"Authorized ▸ {'YES' if authed else 'NO'}",
-                      f"Account    ▸ {('@' + TG.account['username']) if (authed and TG.account) else '—'}",
-                      f"2FA        ▸ session active — OTP phir se nahi mangta" if authed else ""]}
+    accs = ACCOUNTS.view()
+    lines = ["TELEGRAM STATUS", bar,
+             f"Connection ▸ {'LIVE' if connected else 'DISCONNECTED'}",
+             f"Authorized ▸ {'YES' if authed else 'NO'}",
+             f"Account    ▸ {('@' + TG.account['username']) if (authed and TG.account) else '—'}"]
+    if accs:
+        lines.append(f"Managed    ▸ {len(accs)}/{AccountManager.MAX_ACCOUNTS} accounts (active: {next((a['username'] for a in accs if a['active']), '—')})")
+    return {"lines": lines}
 
 async def t_telegram_account(p, o):
     if not TG.account:
@@ -1430,14 +1733,12 @@ async def t_dead_scan(p, o):
         lines.append("None — sab channels healthy hain.")
     if i > 12:
         lines.append(f"+{i - 12} more")
-    lines.append("Note: ek failed request se kisi channel ko permanently dead declare nahi kiya jata.")
+    lines.append("Note: ek failed request se kisi ko permanently dead declare nahi kiya jata.")
     return {"lines": lines}
 
 async def _chan_target(p, o):
     chan = str(p.get("channel", "")).strip()
-    if not chan:
-        chan = ctx_get(o).get("last_channel", "")
-    return chan
+    return chan or ctx_get(o).get("last_channel", "")
 
 async def t_channel_info(p, o):
     chan = await _chan_target(p, o)
@@ -1446,7 +1747,7 @@ async def t_channel_info(p, o):
     try:
         e = await resolve_chat(chan)
     except Exception as ex:
-        return {"ok": False, "lines": [f"ENTITY ERROR ▸ '{chan}' resolve nahi hua ({type(ex).__name__}) — private/inaccessible ho sakta hai"]}
+        return {"ok": False, "lines": [f"ENTITY ERROR ▸ '{chan}' resolve nahi hua ({type(ex).__name__}) — private/inaccessible?"]}
     ctx_set(o, last_channel=getattr(e, "username", None) or str(e.id))
     members = getattr(e, "participants_count", None)
     latest_txt, latest_dt = None, None
@@ -1485,11 +1786,12 @@ async def t_channel_activity(p, o):
     except RPCError as ex:
         return {"ok": False, "lines": [f"READ ERROR ▸ history access nahi ({type(ex).__name__})"]}
     if not dates:
-        return {"lines": [f"{getattr(e, 'title', chan)} ▸ koi message visible nahi — INACTIVE lag raha hai (history empty/read-only)"]}
+        return {"lines": [f"{getattr(e, 'title', chan)} ▸ koi message visible nahi — INACTIVE lag raha hai"]}
     latest, oldest = dates[0], dates[-1]
     span = max(1, (latest - oldest).days or 1)
     per_day = round(len(dates) / span, 1)
-    age_h = (datetime.now(latest.tzinfo) - latest).total_seconds() / 3600
+    latest_aware = latest if latest.tzinfo else latest.replace(tzinfo=timezone.utc)
+    age_h = (datetime.now(latest_aware.tzinfo) - latest_aware).total_seconds() / 3600
     status = "ACTIVE" if age_h < 72 else "INACTIVE (72h+ se koi post nahi)"
     return {"lines": ["CHANNEL ACTIVITY", bar,
                       f"Channel   ▸ {getattr(e, 'title', chan)}",
@@ -1515,12 +1817,13 @@ async def t_channel_age(p, o):
     if not earliest or not earliest[0] or not earliest[0].date:
         return {"lines": [f"{getattr(e, 'title', chan)} ▸ history accessible nahi — age estimate possible nahi"]}
     d = earliest[0].date
-    days = (datetime.now(d.tzinfo) - d).days
+    d_aware = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    days = (datetime.now(d_aware.tzinfo) - d_aware).days
     return {"lines": ["CHANNEL AGE ESTIMATE", bar,
                       f"Channel ▸ {getattr(e, 'title', chan)}",
                       "Estimated age based on earliest accessible message:",
                       f"Earliest ▸ {d.strftime('%d %b %Y %I:%M %p')} (~{days} din / ~{round(days / 30, 1)} months purana)",
-                      "Note: exact creation date Telegram provide nahi karta — ye sirf history-based estimate hai."],
+                      "Note: exact creation date Telegram provide nahi karta — history-based estimate hai."],
             "data": {"channel": getattr(e, "username", None) or str(e.id)}}
 
 async def t_recent_messages(p, o):
@@ -1572,10 +1875,10 @@ async def t_user_info(p, o):
     try:
         u = await resolve_chat(ref)
     except Exception as ex:
-        return {"ok": False, "lines": [f"USER ERROR ▸ '{ref}' resolve nahi hua ({type(ex).__name__}) — deleted/private ho sakta hai"]}
+        return {"ok": False, "lines": [f"USER ERROR ▸ '{ref}' resolve nahi hua ({type(ex).__name__}) — deleted/private?"]}
     ctx_set(o, last_user=getattr(u, "username", None) or str(u.id))
     return {"lines": ["USER REPORT", bar,
-                      f"Name     ▸ {getattr(u, 'first_name', '') or ''} {getattr(u, 'last_name', '') or ''}".strip(),
+                      f"Name     ▸ {(getattr(u, 'first_name', '') or '') + ' ' + (getattr(u, 'last_name', '') or '')}".strip(),
                       f"Username ▸ @{getattr(u, 'username', None) or '(none)'}",
                       f"User ID  ▸ {u.id}",
                       f"Bot      ▸ {'YES' if getattr(u, 'bot', False) else 'no'}"],
@@ -1601,11 +1904,9 @@ async def t_permissions(p, o):
                       f"Role    ▸ {'CREATOR' if perms.is_creator else 'ADMIN'}",
                       f"Rights  ▸ {', '.join(rights) if rights else 'custom/limited'}"]}
 
-# ---------------- monitor workflow tools ----------------
-
+# ---------------- monitor workflow ----------------
 async def _monitor_src(p):
-    return (p.get("source") or STATE["monitor"].get("source")
-            or os.getenv("MONITOR_SOURCE", "").strip() or None)
+    return p.get("source") or cfg_monitor()[0]
 
 async def t_monitor_source(p, o):
     return await MONITOR.start(p, o)
@@ -1613,33 +1914,32 @@ async def t_monitor_source(p, o):
 async def t_fetch_latest(p, o):
     src = await _monitor_src(p)
     if not src:
-        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ MONITOR_SOURCE env set karo ya '/AI @channel ko monitor karo'"]}
+        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ Source Config panel ya MONITOR_SOURCE env set karo"]}
     try:
         e = await resolve_chat(src)
         msgs = await TG.client.get_messages(e, limit=1)
     except Exception as ex:
         return {"ok": False, "lines": [f"SOURCE ERROR ▸ latest message fetch nahi hua ({type(ex).__name__})"]}
     if not msgs or not msgs[0]:
-        return {"lines": ["Source me abhi koi message nahi mila — Telegram ne kuch provide nahi kiya (fabricate nahi karunga)."]}
+        return {"lines": ["Source me abhi koi message nahi — Telegram ne kuch provide nahi kiya (fabricate nahi karunga)."]}
     ctx_set(o, last_channel=getattr(e, "username", None) or str(e.id))
     m = msgs[0]
-    txt = (m.text or "(non-text message / media)")[:600]
     return {"lines": ["LATEST SOURCE MESSAGE", bar,
                       f"Source ▸ {src} ▸ message id {m.id}",
                       f"Date   ▸ {m.date.strftime('%d %b %Y %I:%M %p') if m.date else '—'}",
-                      bar, txt]}
+                      bar, (m.text or "(non-text message / media)")[:600]]}
 
 async def t_parse_source(p, o):
     src = await _monitor_src(p)
     if not src:
-        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ MONITOR_SOURCE env set karo"]}
+        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ Source Config panel ya MONITOR_SOURCE env set karo"]}
     try:
         e = await resolve_chat(src)
         msgs = await TG.client.get_messages(e, limit=1)
     except Exception as ex:
         return {"ok": False, "lines": [f"SOURCE ERROR ▸ ({type(ex).__name__})"]}
     if not msgs or not msgs[0] or not (msgs[0].text or ""):
-        return {"lines": ["Parse karne layak text nahi mila — latest message empty ya non-text hai."]}
+        return {"lines": ["Parse karne layak text nahi mila — latest empty/non-text."]}
     kws = STATE["monitor"].get("keywords") or DEFAULT_KEYWORDS
     parsed = parse_source_text(msgs[0].text, kws)
     return {"lines": ["SOURCE PARSE RESULT", bar,
@@ -1649,16 +1949,16 @@ async def t_parse_source(p, o):
 
 async def t_copy_source(p, o):
     src = await _monitor_src(p)
-    _, dst = MONITOR.configured()
+    _s, dst = cfg_monitor()
     if not src or not dst:
-        return {"ok": False, "lines": ["SOURCE/DESTINATION NOT CONFIGURED ▸ MONITOR_SOURCE aur MONITOR_DESTINATION set karo"]}
+        return {"ok": False, "lines": ["SOURCE/DESTINATION NOT CONFIGURED ▸ Source Config panel se set karo"]}
     try:
         e = await resolve_chat(src)
         msgs = await TG.client.get_messages(e, limit=1)
     except Exception as ex:
         return {"ok": False, "lines": [f"SOURCE ERROR ▸ ({type(ex).__name__})"]}
     if not msgs or not msgs[0] or not (msgs[0].text or ""):
-        return {"ok": False, "lines": ["Copy karne layak source text nahi mila — latest message empty/non-text (fabricate nahi karunga)."]}
+        return {"ok": False, "lines": ["Copy karne layak text nahi mila — latest empty/non-text (fabricate nahi karunga)."]}
     parsed = parse_source_text(msgs[0].text, STATE["monitor"].get("keywords"))
     body = format_update_text(parsed["body"])
     try:
@@ -1677,7 +1977,7 @@ async def t_copy_source(p, o):
 async def t_format_update(p, o):
     src = await _monitor_src(p)
     if not src:
-        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ MONITOR_SOURCE env set karo"]}
+        return {"ok": False, "lines": ["SOURCE NOT CONFIGURED ▸ Source Config panel ya MONITOR_SOURCE env set karo"]}
     try:
         e = await resolve_chat(src)
         msgs = await TG.client.get_messages(e, limit=1)
@@ -1688,13 +1988,12 @@ async def t_format_update(p, o):
     parsed = parse_source_text(msgs[0].text, STATE["monitor"].get("keywords"))
     return {"lines": ["UPDATE PREVIEW (abhi send nahi hua)", bar,
                       format_update_text(parsed["body"])[:700],
-                      bar, "Bhejne ke liye: '/AI latest result bhejo' ya '/AI source copy karke destination par bhejo'"]}
+                      bar, "Bhejne ke liye: '/AI latest result bhejo'"]}
 
 async def t_send_update(p, o):
     return await t_copy_source(p, o)
 
-# ---------------- cross engine tools ----------------
-
+# ---------------- cross engine ----------------
 async def t_cross_start(p, o):    return await ENGINE.start(p, o)
 async def t_cross_stop(p, o):     return ENGINE.stop()
 async def t_cross_pause(p, o):    return await ENGINE.pause(p, o)
@@ -1712,11 +2011,10 @@ async def t_cross_status(p, o):
 async def t_cross_config(p, o):
     return {"lines": ENGINE.config_lines()}
 
-# ---------------- scheduler / task tools ----------------
-
+# ---------------- scheduler / tasks ----------------
 async def t_scheduler_status(p, o):
     active = [j for j in SCHED.jobs if not j.get("done")]
-    return {"lines": [f"SCHEDULER STATUS — clock Asia/Kathmandu ({ktm_now().strftime('%I:%M %p NPT')})", bar,
+    return {"lines": [f"SCHEDULER STATUS — Asia/Kathmandu ({ktm_now().strftime('%I:%M %p NPT')})", bar,
                       f"Active jobs ▸ {len(active)} ▸ History: {len(SCHED.jobs)}",
                       f"Next        ▸ {fmt_kt(min(j['run_at'] for j in active)) if active else '—'}",
                       "Persistence ▸ scheduled_jobs.json ▸ restart recovery on ▸ no double-fire"]}
@@ -1724,20 +2022,20 @@ async def t_scheduler_status(p, o):
 async def t_scheduler_list(p, o):
     lines = [f"SCHEDULED JOBS — ({ktm_now().strftime('%I:%M %p NPT')})", bar]
     if not SCHED.jobs:
-        lines.append('Koi job nahi. Try: "10 minute baad cross start karo" / "7:30 PM par stop karo".')
+        lines.append('Koi job nahi. Try: "10 minute baad cross start karo".')
     for j in SCHED.jobs[-8:]:
         lines.append(f"[{j['id']}] {j['action']} — {j['label']} ▸ {fmt_kt(j['run_at'])} ▸ {'DONE' if j.get('done') else 'PENDING'}")
     return {"lines": lines}
 
 async def t_scheduler_start(p, o):
     if not p.get("run_at"):
-        return {"ok": False, "lines": ["Time samajh nahi aaya — e.g. '10 minute baad start' / '7:30 PM par start'"]}
+        return {"ok": False, "lines": ["Time samajh nahi aaya — e.g. '10 minute baad start'"]}
     j = SCHED.add("START", float(p["run_at"]), str(p.get("label", "scheduled")))
     return {"lines": [f"JOB SCHEDULED ▸ ENGINE START at {j['label']} ({fmt_kt(j['run_at'])}) ▸ id [{j['id']}]"]}
 
 async def t_scheduler_stop(p, o):
     if not p.get("run_at"):
-        return {"ok": False, "lines": ["Time samajh nahi aaya — e.g. '10 minute baad stop' / '7:30 PM par stop'"]}
+        return {"ok": False, "lines": ["Time samajh nahi aaya — e.g. '10 minute baad stop'"]}
     j = SCHED.add("STOP", float(p["run_at"]), str(p.get("label", "scheduled")))
     return {"lines": [f"JOB SCHEDULED ▸ ENGINE STOP at {j['label']} ({fmt_kt(j['run_at'])}) ▸ id [{j['id']}]"]}
 
@@ -1748,13 +2046,12 @@ async def t_scheduler_cancel(p, o):
         if len(pend) == 1:
             jid = pend[0]["id"]
         else:
-            return {"ok": False, "lines": ["Job id batao — '/AI schedule list' se id dekho, phir '/AI cancel job <id>'"]}
+            return {"ok": False, "lines": ["Job id batao — '/AI schedule list' se dekho"]}
     return {"lines": [f"CANCELLED ▸ [{jid}]"] if SCHED.cancel(jid) else ["JOB NOT FOUND ▸ " + jid]}
 
 async def t_task_status(p, o):
-    running = TASKS.running()
     lines = ["TASK MANAGER", bar]
-    if not running and not TASKS.tasks:
+    if not TASKS.tasks:
         lines.append("Koi tracked task nahi — cross ya monitor start karo.")
     for t in TASKS.tasks.values():
         stats = t["stats"]() if t.get("stats") else ""
@@ -1765,10 +2062,8 @@ async def t_task_status(p, o):
 async def t_task_stop(p, o):
     tid = str(p.get("id", "")).upper()
     kind = str(p.get("kind", "")).upper()
-    target = None
-    if tid:
-        target = TASKS.tasks.get(tid) or next((t for t in TASKS.tasks.values() if t["id"].upper() == tid), None)
-    elif kind:
+    target = TASKS.tasks.get(tid) if tid else None
+    if not target and kind:
         target = next((t for t in TASKS.tasks.values() if t["kind"] == kind and t["status"] in ("RUNNING", "PAUSED")), None)
     if not target:
         cand = TASKS.running()
@@ -1780,7 +2075,7 @@ async def t_task_stop(p, o):
     if not target:
         return {"lines": ["Koi running task nahi mila jo stop kiya ja sake."]}
     await TASKS.stop(target["id"])
-    return {"lines": [f"TASK STOPPED ▸ [{target['id']}] {target['label']}", "Actual engine/monitor ko safely stop kiya gaya."]}
+    return {"lines": [f"TASK STOPPED ▸ [{target['id']}] {target['label']}", "Actual engine/monitor safely stop hua."]}
 
 async def t_task_reset(p, o):
     tid = str(p.get("id", "")).upper()
@@ -1792,8 +2087,7 @@ async def t_task_reset(p, o):
         return res if isinstance(res, dict) else {"lines": [str(res)]}
     return {"ok": False, "lines": ["Is task me reset supported nahi hai."]}
 
-# ---------------- admin tools ----------------
-
+# ---------------- admin ----------------
 async def _admin_resolve(p, o):
     chan = str(p.get("channel", "")).strip() or ctx_get(o).get("last_channel", "")
     user = str(p.get("user", "")).strip() or ctx_get(o).get("last_user", "")
@@ -1813,7 +2107,7 @@ async def t_admin_promote(p, o):
     if not chan or not user:
         return {"ok": False, "lines": [
             "ADMIN PROMOTE ke liye channel aur user dono chahiye:",
-            "'/AI @channel me @user ko admin de do' — exact action confirm ke baad hi hoga"]}
+            "'/AI @channel me @user ko admin de do' — confirm ke baad hi hoga"]}
     try:
         chan_e = await resolve_chat(chan)
         user_e = await resolve_chat(user)
@@ -1821,12 +2115,12 @@ async def t_admin_promote(p, o):
     except Exception as ex:
         return {"ok": False, "lines": [f"RESOLVE ERROR ▸ ({type(ex).__name__}) — channel/user accessible nahi"]}
     if not perms.is_admin and not perms.is_creator:
-        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aap is channel ke admin nahi — promote karne ka right nahi hai (bypass nahi hoga)"]}
+        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aap is channel ke admin nahi — bypass nahi hoga"]}
     if not (perms.is_creator or getattr(perms, "add_admins", False)):
-        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aapke paas 'add admins' right nahi hai is channel me"]}
+        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aapke paas 'add admins' right nahi hai"]}
     await TG.client.edit_admin(chan_e, user_e, is_admin=True, title="Admin", **ADMIN_RIGHTS)
     ctx_set(o, last_channel=getattr(chan_e, "username", None), last_user=getattr(user_e, "username", None))
-    safe_log("CMD", "ADMIN", f"Promoted @{getattr(user_e,'username',user)} in {getattr(chan_e,'title',chan)} (confirmed)")
+    safe_log("CMD", "ADMIN", f"Promoted @{getattr(user_e,'username',user)} in {getattr(chan_e,'title',chan)}")
     return {"lines": ["ADMIN PROMOTED (real Telegram result)", bar,
                       f"User    ▸ @{getattr(user_e, 'username', None) or user_e.id}",
                       f"Channel ▸ {getattr(chan_e, 'title', chan)}",
@@ -1843,27 +2137,27 @@ async def t_admin_demote(p, o):
     except Exception as ex:
         return {"ok": False, "lines": [f"RESOLVE ERROR ▸ ({type(ex).__name__})"]}
     if not perms.is_admin and not perms.is_creator:
-        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aap admin nahi — demote karne ka right nahi (bypass nahi hoga)"]}
+        return {"ok": False, "lines": ["PERMISSION DENIED ▸ aap admin nahi — bypass nahi hoga"]}
     await TG.client.edit_admin(chan_e, user_e, is_admin=False)
-    safe_log("CMD", "ADMIN", f"Demoted @{getattr(user_e,'username',user)} in {getattr(chan_e,'title',chan)} (confirmed)")
+    safe_log("CMD", "ADMIN", f"Demoted @{getattr(user_e,'username',user)} in {getattr(chan_e,'title',chan)}")
     return {"lines": ["ADMIN DEMOTED (real Telegram result)", bar,
                       f"User    ▸ @{getattr(user_e, 'username', None) or user_e.id}",
                       f"Channel ▸ {getattr(chan_e, 'title', chan)}",
-                      "Rights  ▸ sab admin rights revok kar di gayi"]}
+                      "Rights  ▸ sab admin rights revoke"]}
 
-# ---------------- jarvis system tools ----------------
-
+# ---------------- jarvis system ----------------
 async def t_jarvis_status(p, o):
     eng = STATE["engine"]
     connected, authed = TG.status()
     hold = max(0, int((eng.get("flood_wait_until") or 0) - time.time()))
     return {"lines": ["JARVIS SYSTEM STATUS", bar, "JARVIS     ▸ ONLINE (NLU active)",
                       f"TELEGRAM   ▸ {'CONNECTED @' + TG.account['username'] if authed and TG.account else 'DISCONNECTED'}",
+                      f"ACCOUNTS   ▸ {len(ACCOUNTS.accounts)}/{AccountManager.MAX_ACCOUNTS} managed",
                       "AUTH       ▸ AUTHORIZED (fail-closed)",
                       f"TASKS      ▸ {len(TASKS.running())} running ({', '.join(t['id'] for t in TASKS.running()) or 'none'})",
                       f"ENGINE     ▸ {eng['status'].upper()}" + (f" — FloodWait {hold}s" if hold else ""),
                       f"MONITOR    ▸ {'RUNNING (event-based)' if STATE['monitor'].get('active') else 'STOPPED'}",
-                      f"AI         ▸ {AI.last_provider} ({AI.total} calls ▸ providers: {', '.join(AI.configured()) or 'local-only'})",
+                      f"AI         ▸ {AI.last_provider} ({AI.total} calls ▸ configured: {', '.join(AI.configured()) or 'local-only'})",
                       f"SCHEDULER  ▸ {len([j for j in SCHED.jobs if not j.get('done')])} active jobs (NPT)",
                       f"TOOLS      ▸ {len(REG.tools)} registered (whitelist)",
                       f"LAST ERROR ▸ {STATE.get('last_error') or 'none'}"]}
@@ -1873,18 +2167,14 @@ async def t_jarvis_help(p, o):
     for t in REG.tools.values():
         cats.setdefault(t.category, []).append(t)
     lines = [f"JARVIS TOOL REGISTRY — {len(REG.tools)} tools (whitelist only)", bar,
-             "Natural language full support: English · Hindi · Hinglish · multi-step",
-             "Examples are endless — kuch bhi naturally likho, JARVIS intent samjhega.", bar]
-    labels = {"TELEGRAM": "TELEGRAM", "JARVIS": "JARVIS", "SCHEDULER": "SCHEDULER",
-              "CROSS": "CROSS ENGINE", "MONITOR": "SOURCE MONITOR", "TASK": "TASKS", "ADMIN": "ADMIN"}
+             "Natural language: English · Hindi · Hinglish · multi-step · fuzzy spelling", bar]
     for cat in ("TELEGRAM", "JARVIS", "SCHEDULER", "CROSS", "MONITOR", "TASK", "ADMIN"):
         tools = cats.get(cat, [])
         if not tools:
             continue
-        lines.append(labels.get(cat, cat) + ":")
+        lines.append(cat + ":")
         for t in tools:
-            need = " (confirm)" if t.confirm else ""
-            lines.append(f"  ▸ {t.desc}{need}")
+            lines.append(f"  ▸ {t.desc}{' (confirm)' if t.confirm else ''}")
     lines += [bar, "Jo cheez supported nahi hai, JARVIS clearly bolega — fake success kabhi nahi."]
     return {"lines": lines}
 
@@ -1897,64 +2187,53 @@ async def t_jarvis_save_state(p, o):
     await state_store.save(STATE)
     await history_store.save(HISTORY[-50:])
     await jobs_store.save(SCHED.jobs[-40:])
-    return {"lines": ["STATE SAVED ▸ jarvis_state.json ▸ ai_history.json ▸ scheduled_jobs.json (atomic, no secrets)"]}
+    await runtime_store.save(cfg_get())
+    return {"lines": ["STATE SAVED ▸ jarvis_state ▸ ai_history ▸ scheduled_jobs ▸ runtime_config ▸ accounts/scripts (encrypted where set)"]}
 
 # ============================================================================
-# REGISTER ALL TOOLS (single source of truth for the whitelist)
+# REGISTER ALL TOOLS
 # ============================================================================
 REG.register("telegram_status", "Telegram connection/authorization status", "TELEGRAM", t_telegram_status)
 REG.register("telegram_account", "Authenticated account details", "TELEGRAM", t_telegram_account)
-REG.register("telegram_dialogs", "Recent dialogs list", "TELEGRAM", t_telegram_dialogs,
-             params=[ToolParam("limit", "number")])
+REG.register("telegram_dialogs", "Recent dialogs list", "TELEGRAM", t_telegram_dialogs, params=[ToolParam("limit", "number")])
 REG.register("telegram_folders", "Dialog folders scan (channels optional)", "TELEGRAM", t_telegram_folders)
-REG.register("telegram_channel_info", "Channel inspect — title/id/members/latest", "TELEGRAM", t_channel_info,
-             params=[ToolParam("channel", "chat", False)])
-REG.register("telegram_channel_activity", "Channel recent activity + active/inactive", "TELEGRAM", t_channel_activity,
-             params=[ToolParam("channel", "chat", False)])
-REG.register("telegram_channel_age_estimate", "Channel age from earliest visible message", "TELEGRAM", t_channel_age,
-             params=[ToolParam("channel", "chat", False)])
-REG.register("telegram_recent_messages", "Recent messages (channel ya globally)", "TELEGRAM", t_recent_messages,
-             params=[ToolParam("channel", "chat", False)])
-REG.register("telegram_message_search", "Search readable messages", "TELEGRAM", t_message_search,
-             params=[ToolParam("query", "text", True)])
+REG.register("telegram_channel_info", "Channel inspect — title/id/members/latest", "TELEGRAM", t_channel_info, params=[ToolParam("channel", "chat")])
+REG.register("telegram_channel_activity", "Channel activity + active/inactive", "TELEGRAM", t_channel_activity, params=[ToolParam("channel", "chat")])
+REG.register("telegram_channel_age_estimate", "Channel age from earliest visible message", "TELEGRAM", t_channel_age, params=[ToolParam("channel", "chat")])
+REG.register("telegram_recent_messages", "Recent messages (channel ya globally)", "TELEGRAM", t_recent_messages, params=[ToolParam("channel", "chat")])
+REG.register("telegram_message_search", "Search readable messages", "TELEGRAM", t_message_search, params=[ToolParam("query", "text", True)])
 REG.register("telegram_saved_messages", "Saved Messages inbox", "TELEGRAM", t_saved_messages)
-REG.register("telegram_user_info", "User resolve + basic info", "TELEGRAM", t_user_info,
-             params=[ToolParam("user", "user", False)])
-REG.register("telegram_permissions", "Own permissions in a channel", "TELEGRAM", t_permissions,
-             params=[ToolParam("channel", "chat", False)])
+REG.register("telegram_user_info", "User resolve + basic info", "TELEGRAM", t_user_info, params=[ToolParam("user", "user")])
+REG.register("telegram_permissions", "Own permissions in a channel", "TELEGRAM", t_permissions, params=[ToolParam("channel", "chat")])
 REG.register("telegram_dead_channel_scan", "Folders me inactive/restricted scan", "TELEGRAM", t_dead_scan)
 
 REG.register("monitor_source", "Source monitoring start (event-based, fast)", "MONITOR", t_monitor_source,
              params=[ToolParam("source", "chat"), ToolParam("destination", "chat"), ToolParam("keywords", "list")])
-REG.register("fetch_latest_source_message", "Latest source message fetch", "MONITOR", t_fetch_latest,
-             params=[ToolParam("source", "chat")])
-REG.register("parse_source_message", "Latest source message parse (keywords)", "MONITOR", t_parse_source)
+REG.register("fetch_latest_source_message", "Latest source message fetch", "MONITOR", t_fetch_latest, params=[ToolParam("source", "chat")])
+REG.register("parse_source_message", "Latest source message parse", "MONITOR", t_parse_source)
 REG.register("copy_source_text", "Exact source text copy → destination", "MONITOR", t_copy_source, confirm=True)
-REG.register("format_update", "Update preview from template (no send)", "MONITOR", t_format_update)
+REG.register("format_update", "Update preview (no send)", "MONITOR", t_format_update)
 REG.register("send_update", "Update destination par bhejo", "MONITOR", t_send_update, confirm=True)
 
 REG.register("cross_status", "Cross engine status", "CROSS", t_cross_status, needs_telegram=False)
 REG.register("cross_start", "Cross engine start", "CROSS", t_cross_start)
 REG.register("cross_stop", "Cross engine stop", "CROSS", t_cross_stop, needs_telegram=False)
-REG.register("cross_pause", "Cross engine pause (manual hold)", "CROSS", t_cross_pause, needs_telegram=False)
+REG.register("cross_pause", "Cross engine pause", "CROSS", t_cross_pause, needs_telegram=False)
 REG.register("cross_resume", "Cross engine resume", "CROSS", t_cross_resume, needs_telegram=False)
-REG.register("cross_reset", "Cross engine reset (queue+counters)", "CROSS", t_cross_reset, needs_telegram=False, confirm=True)
+REG.register("cross_reset", "Cross engine reset", "CROSS", t_cross_reset, needs_telegram=False, confirm=True)
 REG.register("cross_config", "Cross engine configuration", "CROSS", t_cross_config, needs_telegram=False)
 
 REG.register("scheduler_status", "Scheduler status", "SCHEDULER", t_scheduler_status, needs_telegram=False)
 REG.register("scheduler_list", "Scheduled jobs list", "SCHEDULER", t_scheduler_list, needs_telegram=False)
-REG.register("scheduler_start", "Deferred engine start", "SCHEDULER", t_scheduler_start, needs_telegram=False,
-             params=[ToolParam("run_at", "time", True)])
-REG.register("scheduler_stop", "Deferred engine stop", "SCHEDULER", t_scheduler_stop, needs_telegram=False,
-             params=[ToolParam("run_at", "time", True)])
+REG.register("scheduler_start", "Deferred engine start", "SCHEDULER", t_scheduler_start, needs_telegram=False, params=[ToolParam("run_at", "time", True)])
+REG.register("scheduler_stop", "Deferred engine stop", "SCHEDULER", t_scheduler_stop, needs_telegram=False, params=[ToolParam("run_at", "time", True)])
 REG.register("scheduler_cancel", "Job cancel by id", "SCHEDULER", t_scheduler_cancel, needs_telegram=False)
 
 REG.register("task_status", "All running tasks", "TASK", t_task_status, needs_telegram=False)
-REG.register("task_stop", "Task stop by id / active task stop", "TASK", t_task_stop, needs_telegram=False)
+REG.register("task_stop", "Task stop by id / active task", "TASK", t_task_stop, needs_telegram=False)
 REG.register("task_reset", "Task reset by id", "TASK", t_task_reset, needs_telegram=False)
 
-REG.register("admin_check_permissions", "Admin rights check in channel", "ADMIN", t_admin_check,
-             params=[ToolParam("channel", "chat", False)])
+REG.register("admin_check_permissions", "Admin rights check in channel", "ADMIN", t_admin_check, params=[ToolParam("channel", "chat")])
 REG.register("admin_promote", "User ko channel admin banao", "ADMIN", t_admin_promote, confirm=True, sensitive=True,
              params=[ToolParam("channel", "chat"), ToolParam("user", "user")])
 REG.register("admin_demote", "User se admin rights hatao", "ADMIN", t_admin_demote, confirm=True, sensitive=True,
@@ -1968,15 +2247,14 @@ REG.register("jarvis_save_state", "JSON state persist", "JARVIS", t_jarvis_save_
 log.info("Registry armed: %d tools", len(REG.tools))
 
 # ============================================================================
-# COMMAND PIPELINE — /AI detection -> NLU -> plan -> validate -> confirm -> run
+# COMMAND PIPELINE
 # ============================================================================
 def plan_summary_lines(plan):
     lines = []
     if len(plan.steps) > 1 or plan.unsupported or plan.notes:
         lines.append("EXECUTION PLAN ▸")
         for i, s in enumerate(plan.steps, 1):
-            note = f" — {s.note}" if s.note else ""
-            lines.append(f"  {i}. {s.tool}{note}")
+            lines.append(f"  {i}. {s.tool}{(' — ' + s.note) if s.note else ''}")
         for u in plan.unsupported:
             lines.append(f"  [UNSUPPORTED] {u}")
         for n in plan.notes:
@@ -2003,7 +2281,6 @@ async def execute_plan(plan, origin):
     return {"ok": ok_all, "lines": lines or ["Koi output nahi."], "provider": plan.provider}
 
 async def build_plan(raw, origin):
-    """NLU entry. Local classifier first (always available), AI chain as escalation."""
     stripped = re.sub(r"^\s*\/?(ai|jarvis|devil)\b[\s,:.-]*", "", raw.strip(), flags=re.I).strip()
     m = re.match(r"^\/cross\s+(start|stop|reset|status|pause|resume|config)\b", raw.strip(), re.I)
     if m:
@@ -2022,8 +2299,7 @@ async def build_plan(raw, origin):
         return ai_plan
     plan = Plan(provider=(ai_plan.provider if ai_plan else "LOCAL"))
     if ai_plan:
-        plan.unsupported = ai_plan.unsupported
-        plan.notes = ai_plan.notes
+        plan.unsupported, plan.notes = ai_plan.unsupported, ai_plan.notes
     return plan
 
 async def handle_command(raw, origin):
@@ -2033,16 +2309,13 @@ async def handle_command(raw, origin):
     STATE["last_command"] = raw[:120]
     safe_log("CMD", "CMD", f"[{origin}] {raw[:80]}")
 
-    # 1) pending confirmation — origin-bound + expiring
     pend = PENDING_CONFIRM.get(origin)
     if pend:
         if time.time() > pend["expires"]:
             PENDING_CONFIRM.pop(origin, None)
-            return {"ok": False, "action": "CONFIRM_EXPIRED",
-                    "lines": ["CONFIRMATION EXPIRED ▸ command dobara issue karo"]}
+            return {"ok": False, "action": "CONFIRM_EXPIRED", "lines": ["CONFIRMATION EXPIRED ▸ command dobara issue karo"]}
         if re.match(r"^(yes|y|haan|ha|confirm|ok|haan kar do)$", raw, re.I):
             PENDING_CONFIRM.pop(origin, None)
-            safe_log("CMD", "CONFIRM", f"{origin} confirmed — executing plan")
             res = await execute_plan(pend["plan"], origin)
             _record(raw, "CONFIRMED", res, origin)
             return res
@@ -2050,33 +2323,26 @@ async def handle_command(raw, origin):
         safe_log("WARN", "CONFIRM", f"{origin} declined — aborted")
         return {"ok": True, "action": "ABORTED", "lines": ["ABORTED ▸ koi change nahi hua"]}
     if re.match(r"^(yes|y|no|n|haan|nahi)$", raw, re.I):
-        return {"ok": False, "action": "NO_PENDING_CONFIRM",
-                "lines": ["Aapki session me koi confirmation pending nahi hai — pehle command do"]}
+        return {"ok": False, "action": "NO_PENDING_CONFIRM", "lines": ["Aapki session me koi confirmation pending nahi"]}
 
-    # 2) NLU -> plan
     plan = await build_plan(raw, origin)
-
     if not plan.steps:
         lines = ["I couldn't map this request to an available Telegram/JARVIS action.",
-                 "Ye instruction abhi registry ke kisi tool se match nahi hua.",
-                 "Available actions ke liye: /AI HELP"]
+                 "Ye instruction registry ke kisi tool se match nahi hua.", "Available actions: /AI HELP"]
         for u in plan.unsupported:
             lines.append(f"[UNSUPPORTED] {u}")
         _record(raw, "UNMAPPED", {"ok": False, "lines": lines}, origin, plan.provider)
         return {"ok": False, "action": "UNMAPPED", "provider": plan.provider, "lines": lines}
 
-    # 3) sensitive steps -> one confirmation for the whole plan
     confirm_steps = [s for s in plan.steps if REG.tools.get(s.tool) and REG.tools[s.tool].confirm]
     if confirm_steps:
-        summary = plan_summary_lines(plan) + [
-            "SENSITIVE ACTION(S):", bar,
-            *[f"  ▸ {s.tool}" for s in confirm_steps],
-            bar, f"CONFIRM REQUIRED ▸ {CONFIRM_TTL}s me YES reply karo, warna abort."]
+        summary = plan_summary_lines(plan) + ["SENSITIVE ACTION(S):", bar,
+                                              *[f"  ▸ {s.tool}" for s in confirm_steps],
+                                              bar, f"CONFIRM REQUIRED ▸ {CONFIRM_TTL}s me YES reply karo, warna abort."]
         PENDING_CONFIRM[origin] = {"plan": plan, "expires": time.time() + CONFIRM_TTL}
         return {"ok": True, "action": "CONFIRM", "requires_confirmation": True,
                 "confirm_expires_in": CONFIRM_TTL, "provider": plan.provider, "lines": summary}
 
-    # 4) execute
     result = await execute_plan(plan, origin)
     _record(raw, "PLAN", result, origin, plan.provider)
     return result
@@ -2092,16 +2358,106 @@ def _record(raw, action, result, origin, provider=None):
         STATE["last_error"] = None
     state_store.save_bg(STATE)
 
-HISTORY = history_store.load()
+# ============================================================================
+# SAFE SCRIPT RUNNER — AST sandbox (Part 4). Whitelisted sync shims only.
+# ============================================================================
+class SafeScriptRunner:
+    BANNED_NODES = (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
+                    ast.ClassDef, ast.Lambda, ast.AsyncFunctionDef, ast.With,
+                    ast.AsyncWith, ast.Try, ast.Await)
+    BANNED_NAMES = {"exec", "eval", "compile", "open", "__import__", "globals", "locals",
+                    "input", "exit", "quit", "getattr", "setattr", "delattr", "vars", "dir",
+                    "breakpoint", "help", "type", "object", "super", "memoryview", "bytearray",
+                    "bytes", "print", "iter", "next", "hash"}
 
-# ----------------------------------------------------------------------------
-# Diagnostics
-# ----------------------------------------------------------------------------
+    @classmethod
+    def validate(cls, code):
+        if len(code or "") > 8000:
+            return False, "Script too long (max 8000 chars)"
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return False, f"Syntax error line {e.lineno}: {e.msg}"
+        for node in ast.walk(tree):
+            if isinstance(node, cls.BANNED_NODES):
+                return False, f"'{type(node).__name__}' is not allowed"
+            if isinstance(node, ast.Name):
+                if node.id.startswith("__"):
+                    return False, "Dunder names not allowed"
+                if node.id in cls.BANNED_NAMES:
+                    return False, f"'{node.id}' is not allowed"
+            if isinstance(node, ast.Attribute):
+                if node.attr.startswith("__"):
+                    return False, "Dunder attributes not allowed"
+        return True, "OK"
+
+    @classmethod
+    async def run(cls, code, account_ctx, log_fn):
+        ok, err = cls.validate(code)
+        if not ok:
+            return {"ok": False, "error": err}
+
+        def _wrap(coro):
+            """Run a telegram coroutine in a fresh loop (sandbox thread)."""
+            async def _bounded():
+                return await asyncio.wait_for(coro, 20)
+            return asyncio.run(_bounded())
+
+        def send_message(chat_id, text):
+            client = account_ctx.get("client")
+            if not client:
+                raise RuntimeError("Account not connected")
+            _wrap(client.send_message(chat_id, str(text)[:4000]))
+            return True
+
+        def list_folders():
+            return _wrap(_scan_folders_client(account_ctx["client"]))
+
+        def scan_dead_channels(folder_name=None):
+            folders = list_folders()
+            dead = []
+            for f in folders:
+                if folder_name and str(folder_name).lower() not in f["name"].lower():
+                    continue
+                for ch in f["channels"][:20]:
+                    status, reason, _ = _wrap(_analyze_channel_client(account_ctx["client"], ch["id"]))
+                    if status in ("INACTIVE", "RESTRICTED", "INACCESSIBLE"):
+                        dead.append({"name": ch["name"], "username": ch.get("username"),
+                                     "status": status, "reason": reason})
+            return dead
+
+        def log_msg(msg):
+            log_fn(str(msg)[:200])
+
+        def sleep(secs):
+            time.sleep(min(float(secs), 30.0))
+
+        sandbox_globals = {"__builtins__": {},
+                           "send_message": send_message, "list_folders": list_folders,
+                           "scan_dead_channels": scan_dead_channels, "log": log_msg, "sleep": sleep,
+                           "True": True, "False": False, "None": None,
+                           "len": len, "range": range, "str": str, "int": int, "float": float,
+                           "list": list, "dict": dict, "enumerate": enumerate, "round": round}
+
+        def _exec():
+            exec(compile(code, "<script>", "exec"), sandbox_globals, {})
+
+        try:
+            await asyncio.to_thread(_exec)
+            return {"ok": True, "message": "Script executed"}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+SCRIPT_RATE = {}  # acc_id -> last run ts
+
+# ============================================================================
+# Diagnostics / Scheduler
+# ============================================================================
 def diagnostics():
     checks = []
     connected, authed = TG.status()
     eng = STATE["engine"]
-    cid, ids = ENGINE.source_configured()
+    cid, ids = cfg_source()
 
     def add(name, status, detail):
         checks.append({"name": name, "status": status, "detail": detail})
@@ -2110,37 +2466,38 @@ def diagnostics():
     add("Telegram Connection", "PASS" if connected else "FAIL",
         f"Live as @{TG.account['username']}" if connected and TG.account else "No client connected")
     add("Session Validity", "PASS" if authed else ("FAIL" if connected else "WARN"),
-        "Session authorized — OTP nahi mangta" if authed else "Not authorized" if connected else "No session")
+        "Session authorized" if authed else "Not authorized" if connected else "No session")
     add("JARVIS Authorization", "PASS" if server_token() else "FAIL",
         "JARVIS_ACCESS_TOKEN configured" if server_token() else "JARVIS_ACCESS_TOKEN missing — fail closed")
-    add("Source Configuration", "PASS" if (cid and ids) or STATE["monitor"].get("source") else "WARN",
-        f"cross chat {cid} • monitor {STATE['monitor'].get('source') or 'env'}"
-        if (cid and ids) or STATE["monitor"].get("source") else "SOURCE NOT AVAILABLE — SOURCE_CHAT_ID / MONITOR_SOURCE unset")
+    add("Multi-Account", "PASS" if any(a["connected"] for a in ACCOUNTS.view()) else "WARN",
+        f"{len(ACCOUNTS.accounts)}/{AccountManager.MAX_ACCOUNTS} managed ▸ fernet {'ON' if _get_fernet() else 'OFF (memory-only)'}")
+    src_ok = (cid and ids) or cfg_monitor()[0]
+    add("Source Configuration", "PASS" if src_ok else "WARN",
+        f"cross {cid or '—'} • monitor {cfg_monitor()[0] or '—'} (web-config hot reload)"
+        if src_ok else "SOURCE NOT AVAILABLE — Source Config panel ya ENV se set karo")
     try:
         probe = DATA / ".probe"
         probe.write_text("ok"); probe.unlink()
-        add("JSON Storage", "PASS", "data/ writable — no database")
+        add("JSON Storage", "PASS", "data/ writable — accounts/scripts/runtime persisted")
     except Exception:
         add("JSON Storage", "FAIL", "data/ not writable")
     conf = AI.configured()
     add("AI Providers", "PASS" if conf else "WARN",
-        f"NLU chain: {', '.join(conf)}" if conf else "No cloud keys — deterministic local NLU active (full offline)")
-    add("Scheduler", "PASS", f"{len([j for j in SCHED.jobs if not j.get('done')])} active jobs ▸ Asia/Kathmandu ▸ recovery on")
-    add("Cross Engine", "PASS" if ENGINE.status() == "running" else "WARN",
-        f"{ENGINE.status().upper()} ▸ task {ENGINE.tid or '-'}")
+        f"NLU chain: {', '.join(conf)}" if conf else "No cloud keys — deterministic local NLU (full offline, tools unaffected)")
+    add("Scheduler", "PASS", f"{len([j for j in SCHED.jobs if not j.get('done')])} active jobs ▸ Asia/Kathmandu")
+    add("Cross Engine", "PASS" if eng["status"] == "running" else "WARN",
+        f"{eng['status'].upper()} ▸ task {ENGINE.tid or '-'}")
     add("Monitor", "PASS" if STATE["monitor"].get("active") else "WARN",
         "Event-based listener live" if STATE["monitor"].get("active") else "Stopped — /AI source monitor start")
-    missing = [k for k in ("API_ID", "API_HASH", "SESSION_STRING") if not os.getenv(k)]
+    missing = [k for k in ("JARVIS_SECRET_KEY",) if not os.getenv(k)]
     add("Environment", "PASS" if not missing else "WARN",
-        "Core env vars present" if not missing else f"Optional env unset (web form works too): {', '.join(missing)}")
+        "JARVIS_SECRET_KEY set — sessions persist encrypted" if not missing
+        else "JARVIS_SECRET_KEY unset — managed accounts are memory-only")
     score = round(sum(1 if c["status"] == "PASS" else 0.5 if c["status"] == "WARN" else 0
                       for c in checks) / len(checks) * 100)
     safe_log("OK" if score >= 85 else "WARN", "DIAG", f"Diagnostics score {score}%")
     return {"ok": True, "score": score, "checks": checks, "ran_at": int(time.time())}
 
-# ----------------------------------------------------------------------------
-# Scheduler (KTM) — persisted, recovered, no double-fire
-# ----------------------------------------------------------------------------
 class Scheduler:
     def __init__(self):
         self.jobs = jobs_store.load()
@@ -2193,7 +2550,7 @@ class Scheduler:
 SCHED = Scheduler()
 
 # ----------------------------------------------------------------------------
-# Web API (unchanged contract for index.html)
+# Web API (contract preserved — all existing routes + new panels' routes)
 # ----------------------------------------------------------------------------
 app = Quart(__name__)
 
@@ -2214,14 +2571,16 @@ async def api_status():
         "now_kt": ktm_now().strftime("%d %b %Y %I:%M:%S %p NPT"),
         "auth_configured": bool(server_token()),
         "telegram": {"connected": connected, "authorized": authed,
-                     "account": scrub(TG.account) if TG.account else None},
+                     "account": scrub(TG.account) if TG.account else None,
+                     "accounts": ACCOUNTS.view()},
         "engine": {"status": eng["status"], "queue": len(eng["queue"]),
                    "deferred": len(eng["deferred"]), "processed": eng["processed"],
                    "failed": eng["failed"],
                    "flood_wait_in": max(0, int((eng.get("flood_wait_until") or 0) - time.time())),
                    "last_event": eng.get("last_event"),
-                   "source_configured": bool(ENGINE.source_configured()[0] and ENGINE.source_configured()[1])},
-        "ai": {"provider": AI.last_provider, "calls": AI.total, "configured": AI.configured()},
+                   "source_configured": bool(cid_ok()[0] and cid_ok()[1])},
+        "ai": {"provider": AI.last_provider, "calls": AI.total, "configured": AI.configured(),
+               "providers": AI.providers_view()},
         "scheduler": {"active": len([j for j in SCHED.jobs if not j.get("done")]),
                       "jobs": [{"id": j["id"], "action": j["action"], "label": j["label"],
                                 "run_at": j["run_at"], "done": bool(j.get("done"))} for j in SCHED.jobs[-10:]]},
@@ -2229,10 +2588,14 @@ async def api_status():
         "last_error": STATE.get("last_error"),
     })
 
+def cid_ok():
+    return cfg_source()
+
 @app.route("/api/diagnostics")
 async def api_diag():
     return jsonify(diagnostics())
 
+# ---- telegram login (primary) ----
 @app.route("/api/telegram/connect", methods=["POST"])
 async def api_connect():
     body = await request.get_json(silent=True) or {}
@@ -2296,6 +2659,7 @@ async def api_disconnect():
     await TG.disconnect(clear=True)
     return jsonify({"ok": True})
 
+# ---- jarvis auth / commands ----
 @app.route("/api/jarvis/auth", methods=["POST"])
 async def api_auth():
     token = server_token()
@@ -2337,7 +2701,7 @@ async def api_reset():
     origin = caller_origin()
     if str(body.get("confirm", "")).lower() != "yes":
         return jsonify({"ok": True, "requires_confirmation": True, "confirm_expires_in": CONFIRM_TTL,
-                        "lines": [f"CONFIRM REQUIRED ▸ reset clears queue/counters ({CONFIRM_TTL}s). Send {{'confirm':'yes'}}."]})
+                        "lines": [f"CONFIRM REQUIRED ▸ reset clears queue/counters ({CONFIRM_TTL}s)."]})
     PENDING_CONFIRM.pop(origin, None)
     r = await ENGINE.reset()
     return jsonify({"ok": True, "lines": r.get("lines", [])})
@@ -2361,6 +2725,153 @@ async def api_logs():
 async def api_history():
     return jsonify({"ok": True, "history": HISTORY[:40]})
 
+# ---- runtime source config (web-editable, hot reload) ----
+@app.route("/api/config/source", methods=["GET"])
+@require_token
+async def api_get_source_config():
+    cfg = cfg_get()
+    cid, ids = cfg_source()
+    msrc, mdst = cfg_monitor()
+    return jsonify({"ok": True, "config": cfg, "effective": {
+        "source_chat_id": cid, "source_message_ids": ids,
+        "monitor_source": msrc, "monitor_destination": mdst}})
+
+@app.route("/api/config/source", methods=["POST"])
+@require_token
+async def api_set_source_config():
+    body = await request.get_json(silent=True) or {}
+    cfg = runtime_store.load()
+    if "source_chat_id" in body:
+        v = body["source_chat_id"]
+        cfg["source_chat_id"] = int(v) if str(v).strip().lstrip("-").isdigit() else None
+    if "source_message_ids" in body:
+        v = body["source_message_ids"]
+        if isinstance(v, str):
+            cfg["source_message_ids"] = [int(x) for x in re.split(r"[,\s]+", v) if x.strip().isdigit()]
+        elif isinstance(v, list):
+            cfg["source_message_ids"] = [int(x) for x in v if str(x).strip().isdigit()]
+    if "monitor_source" in body:
+        cfg["monitor_source"] = str(body["monitor_source"]).strip() or None
+    if "monitor_destination" in body:
+        cfg["monitor_destination"] = str(body["monitor_destination"]).strip() or None
+    if "dead_threshold_days" in body:
+        try:
+            cfg["dead_threshold_days"] = max(1, int(body["dead_threshold_days"]))
+        except Exception:
+            pass
+    cfg["updated_at"] = int(time.time())
+    await runtime_store.save(cfg)
+    # live-apply monitor targets too
+    if cfg.get("monitor_source"):
+        STATE["monitor"]["source"] = cfg["monitor_source"]
+    if cfg.get("monitor_destination"):
+        STATE["monitor"]["destination"] = cfg["monitor_destination"]
+    state_store.save_bg(STATE)
+    ENGINE.reload_config()
+    safe_log("CMD", "CONFIG", "Source config updated via web UI — hot applied, redeploy nahi chahiye")
+    return jsonify({"ok": True, "config": cfg, "effective": {
+        "source_chat_id": cfg_source()[0], "source_message_ids": cfg_source()[1],
+        "monitor_source": cfg_monitor()[0], "monitor_destination": cfg_monitor()[1]}})
+
+# ---- multi-account (encrypted, max 2) ----
+@app.route("/api/accounts/list", methods=["GET"])
+@require_token
+async def api_accounts_list():
+    return jsonify({"ok": True, "accounts": ACCOUNTS.view(), "max": AccountManager.MAX_ACCOUNTS,
+                    "persistent": bool(_get_fernet())})
+
+@app.route("/api/accounts/add", methods=["POST"])
+@require_token
+async def api_accounts_add():
+    body = await request.get_json(silent=True) or {}
+    label = str(body.get("label", "")).strip()[:40] or "Account"
+    try:
+        api_id = int(str(body.get("api_id", "")).strip())
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid API ID"}), 400
+    api_hash = str(body.get("api_hash", "")).strip()
+    session_string = str(body.get("session_string", "")).strip()
+    if not api_hash or not session_string:
+        return jsonify({"ok": False, "error": "API_HASH and SESSION_STRING required"}), 400
+    ok, payload = await ACCOUNTS.add_account(label, api_id, api_hash, session_string)
+    if not ok:
+        return jsonify({"ok": False, "error": payload}), 400
+    return jsonify({"ok": True, **payload})
+
+@app.route("/api/accounts/remove", methods=["POST"])
+@require_token
+async def api_accounts_remove():
+    body = await request.get_json(silent=True) or {}
+    ok, msg = await ACCOUNTS.remove_account(str(body.get("id", "")))
+    return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+@app.route("/api/accounts/activate", methods=["POST"])
+@require_token
+async def api_accounts_activate():
+    body = await request.get_json(silent=True) or {}
+    ok, msg = await ACCOUNTS.activate(str(body.get("id", "")))
+    if ok:
+        await SCHED.recover()
+    return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+# ---- custom scripts (AST sandbox) ----
+@app.route("/api/scripts/get", methods=["POST"])
+@require_token
+async def api_scripts_get():
+    body = await request.get_json(silent=True) or {}
+    code = scripts_store.load().get(str(body.get("account_id", "")), {}).get("code", "")
+    return jsonify({"ok": True, "code": code})
+
+@app.route("/api/scripts/validate", methods=["POST"])
+@require_token
+async def api_scripts_validate():
+    body = await request.get_json(silent=True) or {}
+    ok, err = SafeScriptRunner.validate(str(body.get("code", "")))
+    return jsonify({"ok": ok, "message": "Valid sandbox script" if ok else None, "error": None if ok else err})
+
+@app.route("/api/scripts/save", methods=["POST"])
+@require_token
+async def api_scripts_save():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    code = str(body.get("code", ""))
+    ok, err = SafeScriptRunner.validate(code)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    scripts = scripts_store.load()
+    scripts[acc_id] = {"code": code, "updated_at": int(time.time())}
+    await scripts_store.save(scripts)
+    safe_log("CMD", "SCRIPT", f"Script saved for {acc_id}")
+    return jsonify({"ok": True})
+
+@app.route("/api/scripts/run", methods=["POST"])
+@require_token
+async def api_scripts_run():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    last = SCRIPT_RATE.get(acc_id, 0)
+    if time.time() - last < 10:
+        return jsonify({"ok": False, "error": f"Rate limit — 1 run per 10s per account ({int(10 - (time.time() - last))}s left)"}), 429
+    code = scripts_store.load().get(acc_id, {}).get("code", "")
+    if not code:
+        return jsonify({"ok": False, "error": "No script saved for this account"}), 400
+    acc = ACCOUNTS.accounts.get(acc_id)
+    if not acc or not acc.get("authorized") or not acc.get("client"):
+        return jsonify({"ok": False, "error": "Account not authorized/connected"}), 400
+    SCRIPT_RATE[acc_id] = time.time()
+    logs = []
+
+    def log_fn(msg):
+        logs.append({"ts": int(time.time()), "msg": msg})
+
+    try:
+        result = await asyncio.wait_for(SafeScriptRunner.run(code, acc, log_fn), timeout=30.0)
+        result["logs"] = logs
+        safe_log("CMD", "SCRIPT", f"Ran script for {acc_id} — {'ok' if result['ok'] else 'fail'}")
+        return jsonify(result)
+    except asyncio.TimeoutError:
+        return jsonify({"ok": False, "error": "Script timed out (30s)", "logs": logs})
+
 @app.errorhandler(404)
 async def not_found(_e):
     return jsonify({"ok": False, "error": "Not found"}), 404
@@ -2376,20 +2887,24 @@ async def on_error(e):
 # ----------------------------------------------------------------------------
 @app.before_serving
 async def boot():
-    log.info("BOOT DEVIL JARVIS ▸ %d tools (NLU whitelist) ▸ clock Asia/Kathmandu", len(REG.tools))
-    safe_log("INFO", "BOOT", f"JARVIS online — {len(REG.tools)} tools, NLU armed (local + provider chain)")
+    log.info("BOOT DEVIL JARVIS v4.0 ▸ %d tools ▸ NLU fuzzy ▸ clock Asia/Kathmandu", len(REG.tools))
+    safe_log("INFO", "BOOT", f"JARVIS v4.0 online — {len(REG.tools)} tools, {len(ACCOUNTS.accounts)} saved account(s)")
     loop = asyncio.get_running_loop()
     loop.create_task(SCHED.loop())
     ENGINE.ensure_task()
     await SCHED.recover()
-    if all(os.getenv(k) for k in ("API_ID", "API_HASH", "SESSION_STRING")):
+    reconnected = 0
+    if ACCOUNTS.accounts:
+        reconnected = await ACCOUNTS.reconnect_all()
+        log.info("BOOT managed accounts reconnected: %d", reconnected)
+        safe_log("INFO" if reconnected else "WARN", "ACCOUNT", f"Managed reconnect: {reconnected}/{len(ACCOUNTS.accounts)}")
+    if not reconnected and all(os.getenv(k) for k in ("API_ID", "API_HASH", "SESSION_STRING")):
         ok, payload = await TG.connect_session(int(os.environ["API_ID"]),
                                                os.environ["API_HASH"], os.environ["SESSION_STRING"])
         log.info("BOOT env auto-connect: %s", "OK" if ok else payload)
         safe_log("INFO" if ok else "WARN", "TELEGRAM", f"Env auto-connect: {'OK' if ok else payload}")
     if not server_token():
         log.warning("BOOT JARVIS_ACCESS_TOKEN not set — protected endpoints refuse (fail closed)")
-        safe_log("WARN", "BOOT", "JARVIS_ACCESS_TOKEN missing — fail-closed mode")
     log.info("BOOT ONLINE ▸ /health ready")
 
 @app.after_serving
@@ -2399,6 +2914,12 @@ async def shutdown():
         ENGINE.eng["status"] = "stopped"
         state_store.save_bg(STATE)
         await TG.disconnect(clear=False)
+        for acc in ACCOUNTS.accounts.values():
+            if acc.get("client"):
+                try:
+                    await acc["client"].disconnect()
+                except Exception:
+                    pass
     except Exception:
         pass
 

@@ -235,6 +235,33 @@ footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12p
 .diag-row b{flex:none;width:118px;font-family:var(--mono);font-size:9.5px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .diag-row span{flex:1;min-width:0;font-family:var(--mono);font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* ---------- v4: accounts / modal / scripts ---------- */
+.acc-row{display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:9px 10px;margin-bottom:7px}
+.badge{flex:none;font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.15em;border:1px solid;border-radius:3px;padding:1px 7px;line-height:15px}
+.badge.act{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1);color:#6ee7b7}
+.badge.idle{border-color:rgba(255,255,255,.14);color:var(--dim)}
+.acc-ops{margin-left:auto;display:flex;gap:5px;flex:none}
+.mini{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#cbd5e1;border-radius:3px;padding:4px 9px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;transition:all .2s}
+.mini:hover:not(:disabled){border-color:rgba(34,211,238,.5);color:#a5f3fc}
+.mini.red:hover:not(:disabled){border-color:rgba(244,63,94,.5);color:#fda4af}
+.mini:disabled{opacity:.35;cursor:not-allowed}
+.mini.armed{border-color:rgba(244,63,94,.6);color:#fda4af}
+#modal{position:fixed;inset:0;z-index:96;display:flex;align-items:center;justify-content:center;background:rgba(2,5,13,.9);backdrop-filter:blur(6px);padding:16px}
+.modal-card{width:min(92vw,440px);position:relative}
+.modal-card .p-body{max-height:76vh;overflow-y:auto}
+textarea.code{width:100%;min-height:170px;resize:vertical;background:rgba(0,0,0,.55);border:1px solid rgba(34,211,238,.12);border-radius:3px;color:#a5f3fc;font-family:var(--mono);font-size:11px;line-height:1.6;padding:11px;outline:none;transition:border-color .2s;white-space:pre}
+textarea.code:focus{border-color:rgba(34,211,238,.5)}
+select.sel{width:100%;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.1);border-radius:3px;color:#cffafe;font-family:var(--mono);font-size:11px;padding:9px 10px;outline:none}
+select.sel:focus{border-color:rgba(34,211,238,.5)}
+.sc-out{max-height:160px;overflow-y:auto;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.45);border-radius:3px;padding:10px;font-family:var(--mono);font-size:9.5px;line-height:1.65}
+.sc-out p{white-space:pre-wrap;word-break:break-word}
+.sc-out .lg{color:#94a3b8}.sc-out .lg::before{content:'▸ ';color:#164e63}
+.sc-out .em{color:#fda4af}.sc-out .ok{color:#6ee7b7}
+.btnrow{display:flex;gap:7px}
+.btnrow .btn{flex:1;width:auto}
+.cfgstatus{font-family:var(--mono);font-size:8.5px;color:#475569;letter-spacing:.12em;margin-top:9px}
+.acct-mini{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:99px;border:1px solid rgba(34,211,238,.4);background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(244,63,94,.2));font-family:var(--disp);font-weight:900;font-size:11px;color:#a5f3fc;flex:none}
+
 /* ---------- lock veil / offline / toasts ---------- */
 .veil{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(2,6,16,.82);backdrop-filter:blur(3px);border-radius:4px;text-align:center;padding:16px}
 .veil svg{color:rgba(251,191,36,.8)}
@@ -303,6 +330,27 @@ footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12p
 </div>
 
 <div id="toasts"></div>
+
+<!-- add account modal -->
+<div id="modal" class="hidden">
+  <section class="panel modal-card"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+    <div class="p-head"><h2>Add Account</h2><button class="mini" id="btn-m-close">✕ Close</button></div>
+    <div class="p-body">
+      <label class="field"><span><span class="lb">Label</span><span class="hint">display name</span></span>
+        <input id="m-label" placeholder="SPIDEY PREDICTION" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">API ID</span><span class="hint">my.telegram.org</span></span>
+        <input id="m-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">API HASH</span><span class="hint">encrypted at rest</span></span>
+        <input id="m-apihash" type="password" placeholder="••••••••••••••••" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">Session String</span><span class="hint">Telethon</span></span>
+        <input id="m-session" type="password" placeholder="BQAAAA…" autocomplete="off"/></label>
+      <div id="m-err" class="err-box hidden" style="margin-bottom:10px"></div>
+      <button class="btn" id="btn-m-add">Connect &amp; Save</button>
+      <p class="note" style="margin-top:10px">Session Telegram ke against validate hoti hai, phir Fernet-encrypted
+        save hoti hai (jab JARVIS_SECRET_KEY set ho). Hash/session kabhi plain JSON ya logs me nahi jaate.</p>
+    </div>
+  </section>
+</div>
 
 <!-- ============ HEADER ============ -->
 <header class="top">
@@ -409,6 +457,27 @@ footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12p
         </div>
       </section>
 
+      <!-- SOURCE CONFIGURATION -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-srcfg">Source Configuration</h2><span class="meta">hot reload</span></div>
+        <div class="p-body">
+          <label class="field"><span><span class="lb">Source Chat ID</span><span class="hint">cross engine</span></span>
+            <input id="cf-chat" inputmode="text" placeholder="-1001234567890" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Source Message IDs</span><span class="hint">comma separated</span></span>
+            <input id="cf-ids" placeholder="101, 102, 103" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Monitor Source</span></span>
+            <input id="cf-msrc" placeholder="@sourcechannel" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Monitor Destination</span></span>
+            <input id="cf-mdst" placeholder="@outputchannel" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Dead Threshold (days)</span></span>
+            <input id="cf-thresh" inputmode="numeric" placeholder="30" autocomplete="off"/></label>
+          <div id="cf-err" class="err-box hidden" style="margin-bottom:10px"></div>
+          <button class="btn" id="btn-cf-save">Save Configuration</button>
+          <p class="cfgstatus" id="cf-status">Priority: JSON config &gt; ENV &gt; default · applies instantly — no redeploy</p>
+        </div>
+        <div class="veil hidden" id="cfg-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to edit config</p></div>
+      </section>
+
       <!-- JARVIS ACCESS -->
       <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
         <div class="p-head"><h2 id="ic-access">JARVIS Access</h2><span class="meta" id="access-meta">LOCKED</span></div>
@@ -428,6 +497,22 @@ footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12p
             <button class="btn ghost" id="btn-lock" style="margin-top:10px">Lock console</button>
           </div>
         </div>
+      </section>
+
+      <!-- ACCOUNTS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-accs">Accounts</h2><span class="meta" id="accs-meta">0/2</span></div>
+        <div class="p-body">
+          <div id="accs-empty" class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:10px;margin-bottom:8px">
+            No managed accounts — primary login upar se use karo, ya yahan encrypted session add karo.
+          </div>
+          <div id="accs-list"></div>
+          <button class="btn ghost" id="btn-add-acc">+ Add Account</button>
+          <p class="note" style="margin-top:9px">Max 2 accounts. Sessions Fernet-encrypted in accounts.json (jab
+            JARVIS_SECRET_KEY set ho — warna memory-only). Active account par hi saare tools/engine chalte hain;
+            Saved Messages listener dono clients par live rehta hai.</p>
+        </div>
+        <div class="veil hidden" id="accs-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to manage accounts</p></div>
       </section>
 
       <!-- ACCOUNT STATUS -->
@@ -471,6 +556,29 @@ footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12p
             Destructive tools require confirmation. All tools respect Telegram permissions and FloodWait.</p>
         </div>
         <div class="veil hidden" id="tools-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Fail-closed — authorization required</p></div>
+      </section>
+
+      <!-- CUSTOM SCRIPT -->
+      <section class="panel" style="position:relative"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-script">Custom Script</h2><span class="meta">AST sandbox · 30s cap</span></div>
+        <div class="p-body" style="display:flex;flex-direction:column;gap:10px">
+          <label class="field" style="margin:0"><span><span class="lb">Account</span><span class="hint">per-account script</span></span>
+            <select class="sel" id="sc-account"><option value="">— no account saved —</option></select></label>
+          <textarea class="code" id="sc-code" spellcheck="false" placeholder="# whitelisted functions only
+folders = list_folders()
+log('Found folders: ' + str(len(folders)))"></textarea>
+          <div class="btnrow">
+            <button class="btn sm ghost" id="btn-sc-validate">Validate</button>
+            <button class="btn sm ghost" id="btn-sc-save">Save</button>
+            <button class="btn sm" id="btn-sc-run">Run</button>
+          </div>
+          <div id="sc-err" class="err-box hidden"></div>
+          <div class="sc-out" id="sc-out"><p class="note">Output logs yahan dikhenge — real results only.</p></div>
+          <p class="note">Allowed: <b style="color:#67e8f9">send_message(chat_id, text)</b> · <b style="color:#67e8f9">list_folders()</b> ·
+            <b style="color:#67e8f9">scan_dead_channels(folder_name)</b> · <b style="color:#67e8f9">log(msg)</b> · <b style="color:#67e8f9">sleep(secs)</b>.
+            imports/exec/eval/dunder blocked · 30s timeout · 1 run / 10s per account.</p>
+        </div>
+        <div class="veil hidden" id="sc-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to use sandbox</p></div>
       </section>
     </div>
 
@@ -753,11 +861,16 @@ function renderAI(ai) {
   const chain = ['GROQ','GEMINI','OPENROUTER','ANTHROPIC','HUGGINGFACE','OPENAI'];
   const conf = ai.configured || [];
   const active = ai.provider || 'LOCAL';
+  const view = {};
+  (ai.providers || []).forEach(p => { view[p.id] = p; });
   $('ai-chain').innerHTML = chain.map((n, i) => {
     const isOn = active === n;
     const cfg = conf.includes(n);
-    return '<div class="ai-row' + (isOn ? ' on' : '') + '"><span class="dot ' + (isOn ? 'ok' : cfg ? 'info' : 'dim') + '"></span>' +
-      '<b>' + n + '</b><small>' + (cfg ? 'key configured' : 'no key — skipped') + '</small>' +
+    const pv = view[n];
+    const st = pv ? pv.status : (cfg ? 'idle' : 'skipped');
+    const failed = st && String(st).startsWith('FAIL');
+    return '<div class="ai-row' + (isOn ? ' on' : '') + '"><span class="dot ' + (isOn ? 'ok' : failed ? 'err' : cfg ? 'info' : 'dim') + '"></span>' +
+      '<b>' + n + '</b><small>' + (cfg ? 'key · ' + esc(st) : 'no key — skipped') + '</small>' +
       '<em class="' + (i === 0 ? 'prim' : '') + '">' + (i === 0 ? 'primary' : 'fallback ' + i) + '</em></div>';
   }).join('');
   $('ai-active').textContent = active;
@@ -847,7 +960,7 @@ function ago(ts, now) {
    ============================================================================ */
 function setAuth(on) {
   S.auth = on;
-  ['console-veil', 'tools-veil', 'logs-veil', 'hist-veil'].forEach(id => $(id).classList.toggle('hidden', on));
+  ['console-veil', 'tools-veil', 'logs-veil', 'hist-veil', 'cfg-veil', 'accs-veil', 'sc-veil'].forEach(id => { const el = $(id); if (el) el.classList.toggle('hidden', on); });
   $('cmd-input').disabled = !on; $('btn-exec').disabled = !on;
   $('chips').querySelectorAll('button').forEach(b => b.disabled = !on);
   $('tools-grid').querySelectorAll('button').forEach(b => b.disabled = !on);
@@ -855,7 +968,7 @@ function setAuth(on) {
   $('access-on').classList.toggle('hidden', !on);
   $('access-meta').textContent = on ? 'ENABLED' : 'LOCKED';
   if (S.status) renderStatus(S.status);
-  if (on) { pollAudit(); runDiag(); }
+  if (on) { pollAudit(); runDiag(); loadAccounts(); loadSourceConfig(); loadScript($('sc-account').value); }
 }
 
 $('btn-unlock').onclick = async () => {
@@ -1156,6 +1269,189 @@ $('clock').textContent = ktm.format(new Date());
   setTimeout(() => $('boot').classList.add('fade'), 1900);
   setTimeout(() => $('boot').remove(), 2500);
 })();
+
+/* ============================================================================
+   v4 — Accounts, Source Config, Script Sandbox
+   ============================================================================ */
+function twoStep(btn, label, fn) {
+  btn.textContent = label;
+  btn.onclick = () => {
+    if (btn.dataset.armed) {
+      delete btn.dataset.armed; btn.classList.remove('armed');
+      btn.disabled = true;
+      Promise.resolve(fn()).finally(() => { btn.disabled = false; btn.textContent = label; });
+    } else {
+      btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = 'sure?';
+      setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = label; }, 3000);
+    }
+  };
+}
+
+async function loadAccounts() {
+  if (!S.auth || !S.up) return;
+  try {
+    const r = await api('/api/accounts/list', {auth: true});
+    const list = r.accounts || [];
+    const max = r.max || 2;
+    $('accs-meta').textContent = list.length + '/' + max;
+    $('accs-empty').classList.toggle('hidden', list.length > 0);
+    $('btn-add-acc').disabled = list.length >= max;
+    $('accs-list').innerHTML = list.map(a => {
+      const init = (a.label || a.username || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+      return '<div class="acc-row"><div class="acct-mini">' + esc(init) + '</div>' +
+        '<div style="min-width:0"><p style="font-weight:700;color:#f1f5f9;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.label) + '</p>' +
+        '<p style="font-family:var(--mono);font-size:9px;color:#67e8f9">@' + esc(a.username || 'unknown') +
+        (a.persisted ? '' : ' · <span style="color:#fcd34d">memory-only</span>') + '</p></div>' +
+        '<span class="badge ' + (a.active ? 'act' : 'idle') + '">' + (a.active ? 'ACTIVE' : 'IDLE') + '</span>' +
+        '<span class="dot ' + (a.connected ? 'ok' : 'dim') + '" title="' + (a.connected ? 'connected' : 'offline') + '"></span>' +
+        '<div class="acc-ops">' + (a.active ? '' : '<button class="mini" data-act="' + esc(a.id) + '">Activate</button>') +
+        '<button class="mini red" data-delid="' + esc(a.id) + '">Remove</button></div></div>';
+    }).join('');
+    $('accs-list').querySelectorAll('[data-act]').forEach(b => b.onclick = () => activateAccount(b.dataset.act));
+    $('accs-list').querySelectorAll('[data-delid]').forEach(b => twoStep(b, 'Remove', () => removeAccount(b.dataset.delid)));
+    const sel = $('sc-account');
+    const cur = sel.value;
+    sel.innerHTML = list.length
+      ? list.map(a => '<option value="' + esc(a.id) + '">' + esc(a.label) + ' (@' + esc(a.username || '?') + ')</option>').join('')
+      : '<option value="">— no account saved —</option>';
+    if (cur) sel.value = cur;
+  } catch (e) { if (e.status === 401) setAuth(false); }
+}
+
+$('btn-add-acc').onclick = () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  $('m-err').classList.add('hidden');
+  $('modal').classList.remove('hidden');
+};
+$('btn-m-close').onclick = () => $('modal').classList.add('hidden');
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') $('modal').classList.add('hidden'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('modal').classList.add('hidden'); });
+
+$('btn-m-add').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const b = $('btn-m-add'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Validating…';
+  $('m-err').classList.add('hidden');
+  try {
+    const r = await api('/api/accounts/add', {method: 'POST', auth: true, body: {
+      label: $('m-label').value.trim(), api_id: $('m-apiid').value.trim(),
+      api_hash: $('m-apihash').value, session_string: $('m-session').value}});
+    ['m-label','m-apiid','m-apihash','m-session'].forEach(id => { $(id).value = ''; });
+    $('modal').classList.add('hidden');
+    toast('ok', 'Account added: @' + r.username);
+    if (r.warning) toast('info', r.warning);
+    await loadAccounts();
+  } catch (e) {
+    $('m-err').textContent = e.message; $('m-err').classList.remove('hidden');
+  } finally { b.disabled = false; b.textContent = 'Connect & Save'; }
+};
+
+async function activateAccount(id) {
+  try {
+    const r = await api('/api/accounts/activate', {method: 'POST', auth: true, body: {id}});
+    toast('ok', r.message || 'Activated');
+    await loadAccounts();
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+async function removeAccount(id) {
+  try {
+    const r = await api('/api/accounts/remove', {method: 'POST', auth: true, body: {id}});
+    toast('info', r.message || 'Removed');
+    await loadAccounts();
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+async function loadSourceConfig() {
+  if (!S.auth || !S.up) return;
+  try {
+    const r = await api('/api/config/source', {auth: true});
+    const c = r.config || {};
+    $('cf-chat').value = c.source_chat_id ?? '';
+    $('cf-ids').value = (c.source_message_ids || []).join(', ');
+    $('cf-msrc').value = c.monitor_source || '';
+    $('cf-mdst').value = c.monitor_destination || '';
+    $('cf-thresh').value = c.dead_threshold_days ?? 30;
+    $('cf-status').textContent = 'Saved: ' + (c.updated_at
+      ? new Date(c.updated_at * 1000).toLocaleString('en-GB', {timeZone: 'Asia/Kathmandu'}) + ' NPT'
+      : 'never') + ' · priority JSON > ENV';
+  } catch (e) { /* silent — next refresh retries */ }
+}
+
+$('btn-cf-save').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  showErr('cf-err', null);
+  const b = $('btn-cf-save'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Saving…';
+  try {
+    const r = await api('/api/config/source', {method: 'POST', auth: true, body: {
+      source_chat_id: $('cf-chat').value.trim(), source_message_ids: $('cf-ids').value.trim(),
+      monitor_source: $('cf-msrc').value.trim(), monitor_destination: $('cf-mdst').value.trim(),
+      dead_threshold_days: $('cf-thresh').value.trim() || 30}});
+    $('cf-status').textContent = 'Saved: just now · effective chat ' + (r.effective && r.effective.source_chat_id || '—') +
+      ' · msgs [' + ((r.effective && r.effective.source_message_ids) || []).join(',') + '] · hot applied';
+    toast('ok', 'Source configuration saved — live applied');
+    pollStatus();
+  } catch (e) { showErr('cf-err', e.message); }
+  finally { b.disabled = false; b.textContent = 'Save Configuration'; }
+};
+
+/* ---------------- script sandbox UI ---------------- */
+function scShow(lines, cls) {
+  const out = $('sc-out');
+  out.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  (lines && lines.length ? lines : [['em', 'No output']]).forEach(([k, m]) => {
+    const p = document.createElement('p'); p.className = k; p.textContent = m;
+    frag.appendChild(p);
+  });
+  out.appendChild(frag);
+}
+
+async function loadScript(accId) {
+  if (!S.auth || !accId) return;
+  try {
+    const r = await api('/api/scripts/get', {method: 'POST', auth: true, body: {account_id: accId}});
+    $('sc-code').value = r.code || '';
+  } catch (e) { /* keep editor content on error */ }
+}
+$('sc-account').onchange = () => loadScript($('sc-account').value);
+
+$('btn-sc-validate').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  try {
+    const r = await api('/api/scripts/validate', {method: 'POST', auth: true, body: {code: $('sc-code').value}});
+    if (r.ok) { scShow([['ok', 'VALID ▸ sandbox checks passed']]); toast('ok', 'Script valid'); }
+    else { scShow([['em', 'INVALID ▸ ' + (r.error || 'unknown')]]); }
+  } catch (e) { scShow([['em', 'ERROR ▸ ' + e.message]]); }
+};
+
+$('btn-sc-save').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const accId = $('sc-account').value;
+  if (!accId) return toast('err', 'Pehle ek managed account add/select karo');
+  try {
+    await api('/api/scripts/save', {method: 'POST', auth: true, body: {account_id: accId, code: $('sc-code').value}});
+    scShow([['ok', 'SAVED ▸ scripts.json (validated before save)']]);
+    toast('ok', 'Script saved');
+  } catch (e) { scShow([['em', 'SAVE FAILED ▸ ' + e.message]]); }
+};
+
+$('btn-sc-run').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const accId = $('sc-account').value;
+  if (!accId) return toast('err', 'Pehle ek managed account add/select karo');
+  const b = $('btn-sc-run'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Running…';
+  scShow([['lg', 'executing in sandbox (max 30s)…']]);
+  try {
+    const r = await api('/api/scripts/run', {method: 'POST', auth: true, body: {account_id: accId}});
+    const lines = [];
+    lines.push([r.ok ? 'ok' : 'em', (r.ok ? 'OK ▸ ' : 'FAILED ▸ ') + (r.message || r.error || 'done')]);
+    (r.logs || []).forEach(l => lines.push(['lg', l.msg]));
+    scShow(lines);
+  } catch (e) { scShow([['em', 'ERROR ▸ ' + e.message]]); }
+  finally { b.disabled = false; b.textContent = 'Run'; }
+};
 
 /* greeting + first sync */
 term('sys', 'DEVIL JARVIS CORE v3.1 — Telegram AI Control System');
