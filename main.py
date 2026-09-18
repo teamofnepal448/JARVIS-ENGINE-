@@ -48,8 +48,8 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-HOST = os.environ.get("JARVIS_HOST", "127.0.0.1")
-PORT = int(os.environ.get("JARVIS_PORT", "8090"))
+HOST = os.environ.get("JARVIS_HOST") or "0.0.0.0"
+PORT = int(os.environ.get("PORT") or os.environ.get("JARVIS_PORT") or "8090")
 ENV_API_ID = (os.environ.get("JARVIS_API_ID") or "").strip()
 ENV_API_HASH = (os.environ.get("JARVIS_API_HASH") or "").strip()
 OPENAI_BASE_URL = (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
@@ -2948,7 +2948,13 @@ class JarvisCore:
                 self.diag.warn("boot", "env",
                                "no api credentials yet (set JARVIS_API_ID/JARVIS_API_HASH or per-account)")
         self.scheduler.start()
-        # reconnect + restore
+        # reconnect + restore in the background - the HTTP port must bind immediately
+        asyncio.create_task(self._restore_accounts())
+        self.diag.ok("boot", "complete", f"uptime begins; {len(self.accounts.all())} account(s)")
+        self.diag.persist()
+
+    async def _restore_accounts(self) -> None:
+        """Runs after the HTTP listener is up - reconnects + resumes work."""
         for a in self.accounts.all():
             aid = a["account_id"]
             try:
@@ -2971,8 +2977,6 @@ class JarvisCore:
                     if t.status == TASK_ACTIVE:
                         self.tasks.set_status(t, TASK_WAITING,
                                               f"account offline at boot ({type(exc).__name__})")
-        self.diag.ok("boot", "complete", f"uptime begins; {len(self.accounts.all())} account(s)")
-        self.diag.persist()
 
     async def shutdown(self) -> None:
         self.diag.info("boot", "shutdown", "graceful stop")
@@ -3019,6 +3023,10 @@ def build_app() -> "FastAPI":
     @app.get("/")
     async def index() -> "FileResponse":
         return FileResponse(ROOT / "index.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/healthz")
+    async def healthz() -> "JSONResponse":
+        return JSONResponse({"ok": True, "up": True, "time": iso()})
 
     @app.get("/api/status")
     async def api_status() -> "JSONResponse":
@@ -3219,7 +3227,7 @@ def banner() -> None:
     print("=" * 64)
     print(" JARVIS CORE - autonomous telegram operations (fresh build)")
     print("=" * 64)
-    print(f" web control : http://{HOST}:{PORT}")
+    print(f" bind        : 0.0.0.0:{PORT}  (PORT env: {'set -> ' + os.environ['PORT'] if os.environ.get('PORT') else 'not set, using fallback'})")
     print(f" data dir    : {DATA_DIR}")
     print(f" telethon    : {'ok' if TELETHON_OK else 'MISSING - ' + TELETHON_ERR}")
     print(f" ai provider : {'configured (' + OPENAI_MODEL + ')' if OPENAI_API_KEY else 'not configured (deterministic mode)'}")
@@ -3232,4 +3240,9 @@ if __name__ == "__main__":
     if not WEB_OK:
         print("FATAL: fastapi/uvicorn/httpx missing. pip install -r requirements.txt")
         sys.exit(1)
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    print(f" STARTING HTTP SERVER on 0.0.0.0:{PORT} ...", flush=True)
+    try:
+        uvicorn.run(app, host=HOST, port=PORT, log_level="info", proxy_headers=True)
+    except Exception as exc:
+        print(f"FATAL: http server failed to start: {type(exc).__name__}: {exc}")
+        sys.exit(1)
