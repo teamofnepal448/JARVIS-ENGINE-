@@ -1,0 +1,1173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#02050d" />
+<title>DEVIL JARVIS — Telegram AI Control System</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%2322d3ee' stroke-width='4' stroke-dasharray='20 120'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23f43f5e' stroke-width='3' stroke-dasharray='12 90'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%2322d3ee'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --cy:#22d3ee; --cy-dim:#0e7490; --red:#f43f5e; --ok:#34d399; --warn:#fbbf24;
+  --bg:#02050d; --panel:#050b18; --tx:#cbd5e1; --dim:#64748b; --mono:'JetBrains Mono',monospace;
+  --disp:'Orbitron',sans-serif; --sans:'Rajdhani',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:15px;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::selection{background:rgba(34,211,238,.35);color:#fff}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:rgba(255,255,255,.02)}
+::-webkit-scrollbar-thumb{background:rgba(34,211,238,.22);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:rgba(34,211,238,.45)}
+button{font-family:inherit;cursor:pointer}
+input{font-family:var(--mono)}
+.hidden{display:none!important}
+
+/* ---------- backdrop ---------- */
+.bgfx{position:fixed;inset:0;z-index:0;pointer-events:none}
+.grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(56,189,248,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(56,189,248,.045) 1px,transparent 1px);background-size:44px 44px;mask-image:radial-gradient(ellipse 90% 70% at 50% 30%,#000 30%,transparent 100%);-webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 30%,#000 30%,transparent 100%)}
+.glow-a{position:absolute;inset:0;background:radial-gradient(ellipse 60% 45% at 50% 0%,rgba(8,90,130,.28),transparent 65%)}
+.glow-b{position:absolute;inset:0;background:radial-gradient(ellipse 45% 35% at 88% 100%,rgba(140,20,45,.16),transparent 70%)}
+.scanlines{position:absolute;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.016) 0 1px,transparent 1px 3px);opacity:.5}
+.beam{position:absolute;left:0;right:0;height:90px;background:linear-gradient(180deg,transparent,rgba(34,211,238,.05),transparent);animation:beam 10s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes beam{0%{transform:translateY(-30%);opacity:0}12%{opacity:1}60%{opacity:.7}100%{transform:translateY(110vh);opacity:0}}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse 90% 85% at 50% 50%,transparent 55%,rgba(1,3,8,.8) 100%)}
+#stars{position:absolute;inset:0}
+
+/* ---------- boot ---------- */
+#boot{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);transition:opacity .5s}
+#boot.fade{opacity:0;pointer-events:none}
+.boot-title{font-family:var(--disp);font-size:clamp(20px,4vw,30px);font-weight:900;letter-spacing:.35em}
+.tx-red{color:var(--red);text-shadow:0 0 18px rgba(244,63,94,.8)}
+.tx-cy{color:#67e8f9;text-shadow:0 0 18px rgba(34,211,238,.8)}
+.boot-sub{margin-top:8px;font-size:10px;font-weight:700;letter-spacing:.5em;color:var(--dim);text-transform:uppercase}
+#boot-lines{margin-top:26px;height:110px;width:min(92vw,400px);overflow:hidden;font-family:var(--mono);font-size:10px;line-height:1.9;color:rgba(34,211,238,.7)}
+#boot-lines p:last-child{color:#a5f3fc}
+#boot-bar-wrap{margin-top:14px;width:min(92vw,400px);height:3px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden}
+#boot-bar{height:100%;width:0;background:linear-gradient(90deg,var(--cy-dim),var(--cy),var(--red));box-shadow:0 0 12px rgba(34,211,238,.7);transition:width .15s}
+
+/* ---------- reactor ---------- */
+.reactor{position:relative}
+.spin-a{animation:spin 12s linear infinite;transform-origin:50% 50%}
+.spin-b{animation:spin 6s linear infinite reverse;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- header ---------- */
+header.top{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(34,211,238,.1);background:rgba(2,6,16,.86);backdrop-filter:blur(14px)}
+.top-row{max-width:1700px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 12px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand h1{font-family:var(--disp);font-size:19px;font-weight:900;letter-spacing:.22em}
+.brand small{display:block;margin-top:2px;font-size:8px;font-weight:700;letter-spacing:.42em;color:var(--dim);text-transform:uppercase}
+.pills{display:flex;flex:1;flex-wrap:wrap;gap:6px;justify-content:center}
+.pill{display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.03);border-radius:3px;padding:4px 10px}
+.pill .k{font-size:9px;font-weight:700;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+.pill .v{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em}
+.dot{position:relative;display:inline-flex;width:7px;height:7px;flex:none}
+.dot::before{content:'';position:absolute;inset:0;border-radius:99px;opacity:.6;animation:ping 1.6s ease-out infinite}
+.dot::after{content:'';position:absolute;inset:0;border-radius:99px}
+@keyframes ping{0%{transform:scale(1);opacity:.6}80%,100%{transform:scale(2.4);opacity:0}}
+.dot.ok::before,.dot.ok::after{background:var(--ok)} .dot.warn::before,.dot.warn::after{background:var(--warn)}
+.dot.err::before,.dot.err::after{background:var(--red)} .dot.info::before,.dot.info::after{background:var(--cy)}
+.dot.dim::before,.dot.dim::after{background:#475569} .dot.dim::before{animation:none}
+.v.ok{color:var(--ok)} .v.warn{color:var(--warn)} .v.err{color:var(--red)} .v.info{color:#67e8f9} .v.dim{color:#475569}
+.clock{font-family:var(--mono);font-size:11px;color:#a5f3fc;display:flex;align-items:center;gap:7px;letter-spacing:.12em}
+.clock span{font-size:8px;color:var(--dim);letter-spacing:.3em}
+.iconbtn{display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:var(--tx);padding:6px 12px;border-radius:3px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;transition:all .2s}
+.iconbtn:hover{border-color:rgba(34,211,238,.5);color:#a5f3fc}
+
+/* ticker */
+.ticker-wrap{overflow:hidden;border-top:1px solid rgba(34,211,238,.07);background:rgba(0,0,0,.3)}
+#ticker{display:flex;width:max-content;align-items:center;gap:34px;padding:6px 16px;animation:tick 40s linear infinite;will-change:transform}
+@keyframes tick{to{transform:translateX(-50%)}}
+#ticker b{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:#3f5468;font-weight:400}
+#ticker span{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;font-weight:700}
+
+/* ---------- layout ---------- */
+main{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:16px 12px}
+.cols{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:1024px){.cols{grid-template-columns:300px 1fr 330px}}
+@media(min-width:1500px){.cols{grid-template-columns:310px 1fr 350px}}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+.row2{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:1024px){.row2{grid-template-columns:340px 300px 1fr}}
+footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12px 22px}
+
+/* ---------- HUD panel ---------- */
+.panel{position:relative;border:1px solid rgba(34,211,238,.1);border-radius:4px;background:linear-gradient(160deg,rgba(13,33,54,.5),rgba(3,8,18,.85) 55%),rgba(3,9,20,.72);backdrop-filter:blur(12px);box-shadow:inset 0 1px 0 rgba(148,233,255,.06),0 18px 50px -30px rgba(0,0,0,.9);transition:border-color .3s}
+.panel:hover{border-color:rgba(34,211,238,.22)}
+.corner{position:absolute;width:10px;height:10px;border:1.5px solid rgba(34,211,238,.55);pointer-events:none;transition:all .3s}
+.panel:hover .corner{width:14px;height:14px;border-color:rgba(103,232,249,.95);filter:drop-shadow(0 0 5px rgba(34,211,238,.8))}
+.c-tl{top:0;left:0;border-right:0;border-bottom:0}.c-tr{top:0;right:0;border-left:0;border-bottom:0}
+.c-bl{bottom:0;left:0;border-right:0;border-top:0}.c-br{bottom:0;right:0;border-left:0;border-top:0}
+.p-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(34,211,238,.08);padding:10px 14px}
+.p-head h2{display:flex;align-items:center;gap:9px;font-size:10px;font-weight:700;letter-spacing:.28em;text-transform:uppercase;color:rgba(165,243,252,.8)}
+.p-head h2 svg{color:rgba(34,211,238,.8)}
+.p-head .meta{font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+.p-body{padding:13px 14px;position:relative}
+
+/* ---------- controls ---------- */
+.field{display:block;margin-bottom:10px}
+.field>span{display:flex;justify-content:space-between;margin-bottom:5px}
+.field .lb{font-size:9px;font-weight:700;letter-spacing:.25em;color:var(--dim);text-transform:uppercase}
+.field .hint{font-family:var(--mono);font-size:9px;color:rgba(34,211,238,.5)}
+.field input{width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:10px 12px;font-size:12px;color:#cffafe;outline:none;transition:all .2s}
+.field input::placeholder{color:#334155}
+.field input:focus{border-color:rgba(34,211,238,.7);background:rgba(34,211,238,.04);box-shadow:0 0 20px -6px rgba(34,211,238,.5)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border:1px solid rgba(34,211,238,.4);background:rgba(34,211,238,.1);color:#a5f3fc;border-radius:3px;padding:10px 14px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;transition:all .2s}
+.btn:hover:not(:disabled){border-color:rgba(103,232,249,.8);background:rgba(34,211,238,.2);box-shadow:0 0 25px -6px rgba(34,211,238,.7)}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn:disabled{cursor:not-allowed;opacity:.4}
+.btn.danger{border-color:rgba(244,63,94,.4);background:rgba(244,63,94,.1);color:#fecdd3}
+.btn.danger:hover:not(:disabled){border-color:rgba(251,113,133,.8);background:rgba(244,63,94,.2);box-shadow:0 0 25px -6px rgba(244,63,94,.7)}
+.btn.ghost{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.03);color:#cbd5e1}
+.btn.ghost:hover:not(:disabled){border-color:rgba(255,255,255,.25);background:rgba(255,255,255,.07)}
+.btn.sm{width:auto;padding:7px 12px;font-size:10px}
+.err-box{border:1px solid rgba(244,63,94,.35);background:rgba(244,63,94,.09);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#fda4af}
+.ok-box{border:1px solid rgba(52,211,153,.35);background:rgba(52,211,153,.08);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#6ee7b7}
+.warn-box{border:1px solid rgba(251,191,36,.35);background:rgba(251,191,36,.09);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#fcd34d}
+.note{font-family:var(--mono);font-size:9px;line-height:1.6;color:#475569}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(34,211,238,.25);border-top-color:var(--cy);border-radius:99px;animation:spin .8s linear infinite}
+.step-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;color:#67e8f9;margin-top:8px}
+.step-line .dot{flex:none}
+
+/* tabs */
+.tabs{display:flex;gap:4px;margin-bottom:12px}
+.tab{flex:1;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);color:var(--dim);padding:7px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;border-radius:3px;transition:all .2s}
+.tab.on{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.1);color:#a5f3fc}
+
+/* account / rows */
+.acct-box{border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.04);border-radius:3px;padding:11px;font-family:var(--mono);font-size:10.5px}
+.acct-box .ttl{font-size:8.5px;font-weight:700;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
+.kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.kv b{color:#f1f5f9;font-weight:500}
+.kv .acc{color:#a5f3fc;font-weight:700}
+.kv span{color:var(--dim)}
+.chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:rgba(110,231,183,.9);padding:2px 0}
+.avatar{display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:99px;border:1px solid rgba(34,211,238,.4);background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(244,63,94,.2));font-family:var(--disp);font-weight:900;font-size:14px;color:#a5f3fc;flex:none}
+
+/* session reveal */
+.reveal{border:1px solid rgba(251,191,36,.4);background:rgba(251,191,36,.06);border-radius:3px;padding:11px;margin-top:10px}
+.reveal textarea{width:100%;height:64px;resize:none;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.1);border-radius:3px;color:#fcd34d;font-family:var(--mono);font-size:10px;padding:8px;outline:none}
+
+/* ---------- console ---------- */
+#term{height:400px;overflow-y:auto;border:1px solid rgba(34,211,238,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:12px;font-family:var(--mono);font-size:11px;line-height:1.6}
+@media(min-width:1024px){#term{height:450px}}
+#term p{white-space:pre-wrap;word-break:break-word}
+.t-user{margin-top:8px;font-weight:700;color:#67e8f9}
+.t-user::before{content:'❯ ';color:var(--red)}
+.t-jarvis{color:#cbd5e1}.t-jarvis::before{content:'│ ';color:#164e63}
+.t-sys{color:#475569}.t-err{color:#f87171}.t-ok{color:#6ee7b7}
+.caretline{color:rgba(34,211,238,.7)}.caretline::before{content:'❯ ';color:var(--red)}
+.caret{display:inline-block;width:7px;height:13px;background:rgba(103,232,249,.9);vertical-align:-2px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{55%{opacity:1}56%,100%{opacity:0}}
+.typing{display:inline-flex;gap:3px;vertical-align:-2px}.typing i{width:4px;height:4px;border-radius:99px;background:rgba(34,211,238,.9);animation:ty 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.18s}.typing i:nth-child(3){animation-delay:.36s}
+@keyframes ty{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.05);color:rgba(103,232,249,.8);border-radius:3px;padding:5px 10px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;transition:all .2s}
+.chip:hover:not(:disabled){border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.15);color:#fff}
+.chip:disabled{opacity:.3;cursor:not-allowed}
+.cmd-row{display:flex;gap:8px}
+.cmd-row .inwrap{position:relative;flex:1}
+.cmd-row .inwrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--red)}
+#cmd-input{width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:11px 12px 11px 32px;font-size:12px;color:#cffafe;outline:none;transition:all .2s}
+#cmd-input:focus{border-color:rgba(34,211,238,.6);box-shadow:0 0 22px -6px rgba(34,211,238,.5)}
+#cmd-input::placeholder{color:#334155}
+#confirm-bar{display:flex;align-items:center;gap:10px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.08);border-radius:3px;padding:9px 12px;font-family:var(--mono);font-size:10px;color:#fcd34d;animation:pulsebar 1.4s ease-in-out infinite}
+@keyframes pulsebar{50%{box-shadow:0 0 22px -6px rgba(251,191,36,.6)}}
+
+/* ---------- tool tiles ---------- */
+#tools-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+@media(min-width:640px){#tools-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:1200px){#tools-grid{grid-template-columns:repeat(4,1fr)}}
+.tile{position:relative;overflow:hidden;text-align:left;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.025);border-radius:3px;padding:10px;transition:all .2s;color:var(--tx)}
+.tile:hover:not(:disabled){transform:translateY(-2px);border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.07);box-shadow:0 8px 28px -10px rgba(34,211,238,.5)}
+.tile:disabled{opacity:.4;cursor:not-allowed}
+.tile svg{color:var(--cy);margin-bottom:7px;display:block}
+.tile.red svg{color:var(--red)}
+.tile.red:hover:not(:disabled){border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.07);box-shadow:0 8px 28px -10px rgba(244,63,94,.5)}
+.tile b{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;font-weight:700}
+.tile span{display:block;margin-top:2px;font-family:var(--mono);font-size:8.5px;line-height:1.4;color:var(--dim)}
+
+/* ---------- engine / ai / scheduler ---------- */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat .l{font-size:8px;font-weight:700;letter-spacing:.25em;color:var(--dim);text-transform:uppercase}
+.stat .v{font-family:var(--mono);font-size:14px;font-weight:700;color:#a5f3fc;margin-top:2px}
+.meter{height:4px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+.meter>div{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--cy-dim),var(--cy));transition:width .7s}
+.ai-row{display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.02);border-radius:3px;padding:7px 10px;margin-bottom:5px}
+.ai-row.on{border-color:rgba(34,211,238,.4);background:rgba(34,211,238,.08);box-shadow:0 0 18px -8px rgba(34,211,238,.8)}
+.ai-row b{font-family:var(--mono);font-size:10px;letter-spacing:.1em}
+.ai-row small{font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+.ai-row em{margin-left:auto;font-style:normal;font-size:8px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+.ai-row em.prim{color:rgba(251,113,133,.9)}
+.job{display:flex;align-items:center;gap:10px;border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.05);border-radius:3px;padding:8px 11px;margin-bottom:7px}
+.job .jt{font-family:var(--mono);font-size:10px;font-weight:700;color:#e0f2fe}
+.job .js{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.job.done{opacity:.5;border-color:rgba(255,255,255,.05);background:rgba(0,0,0,.3)}
+.job button{margin-left:auto;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--dim);border-radius:3px;width:22px;height:22px;display:grid;place-items:center;transition:all .2s}
+.job button:hover{border-color:rgba(244,63,94,.6);color:var(--red)}
+.q-line{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--dim);padding:2px 0}
+.q-line b{color:#94a3b8;font-weight:400}
+
+/* ---------- logs / diag ---------- */
+.logrow{display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid rgba(255,255,255,.03);padding:6px 4px;font-family:var(--mono);font-size:9.5px}
+.logrow:last-child{border:0}
+.tag{flex:none;border:1px solid;border-radius:3px;padding:0 6px;font-size:8px;font-weight:700;line-height:16px}
+.tag.INFO{border-color:rgba(34,211,238,.3);background:rgba(34,211,238,.09);color:#67e8f9}
+.tag.WARN{border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.09);color:#fcd34d}
+.tag.ERROR{border-color:rgba(244,63,94,.3);background:rgba(244,63,94,.09);color:#fda4af}
+.tag.CMD{border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.09);color:#c4b5fd}
+.tag.OK{border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.09);color:#6ee7b7}
+.logrow .src{flex:none;color:#3f5468}
+.logrow .m{flex:1;min-width:0;word-break:break-word;color:#94a3b8}
+.logrow .t{flex:none;color:#334155}
+.scrolly{height:250px;overflow-y:auto}
+.diag-row{display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.3);border-radius:3px;padding:7px 10px;margin-bottom:5px}
+.diag-row .st{flex:none;border:1px solid;border-radius:3px;padding:0 7px;font-family:var(--mono);font-size:8px;font-weight:700;line-height:16px}
+.diag-row .st.PASS{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1);color:#6ee7b7}
+.diag-row .st.WARN{border-color:rgba(251,191,36,.4);background:rgba(251,191,36,.1);color:#fcd34d}
+.diag-row .st.FAIL{border-color:rgba(244,63,94,.4);background:rgba(244,63,94,.1);color:#fda4af}
+.diag-row b{flex:none;width:118px;font-family:var(--mono);font-size:9.5px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diag-row span{flex:1;min-width:0;font-family:var(--mono);font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- lock veil / offline / toasts ---------- */
+.veil{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(2,6,16,.82);backdrop-filter:blur(3px);border-radius:4px;text-align:center;padding:16px}
+.veil svg{color:rgba(251,191,36,.8)}
+.veil p{font-family:var(--mono);font-size:10px;letter-spacing:.25em;text-transform:uppercase;color:rgba(252,211,77,.8)}
+#offline{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(2,5,13,.94);backdrop-filter:blur(8px);text-align:center;padding:24px}
+#toasts{position:fixed;top:14px;right:14px;z-index:95;display:flex;flex-direction:column;gap:8px;max-width:min(92vw,380px)}
+.toast{border:1px solid;border-radius:3px;background:rgba(3,9,20,.95);backdrop-filter:blur(8px);padding:10px 14px;font-family:var(--mono);font-size:10px;line-height:1.5;box-shadow:0 14px 40px -12px rgba(0,0,0,.8);animation:tin .25s ease-out}
+@keyframes tin{from{transform:translateX(20px);opacity:0}}
+.toast.ok{border-color:rgba(52,211,153,.4);color:#6ee7b7}
+.toast.err{border-color:rgba(244,63,94,.5);color:#fda4af}
+.toast.info{border-color:rgba(34,211,238,.4);color:#67e8f9}
+.foot{border:1px solid rgba(34,211,238,.1);border-radius:3px;background:rgba(0,0,0,.4);padding:12px 16px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:#3f5468}
+</style>
+</head>
+<body>
+
+<!-- backdrop -->
+<div class="bgfx">
+  <div class="glow-a"></div><div class="glow-b"></div>
+  <div class="grid-bg"></div><canvas id="stars"></canvas>
+  <div class="scanlines"></div><div class="beam"></div><div class="vig"></div>
+</div>
+
+<!-- boot -->
+<div id="boot">
+  <div class="reactor" style="width:150px;height:150px;margin-bottom:26px">
+    <svg viewBox="0 0 200 200" class="spin-a" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(34,211,238,.12)" stroke-width="1"/>
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(34,211,238,.65)" stroke-width="1.5" stroke-dasharray="40 380" stroke-linecap="round"/>
+      <circle cx="100" cy="100" r="80" fill="none" stroke="rgba(34,211,238,.2)" stroke-width="1" stroke-dasharray="4 8"/>
+    </svg>
+    <svg viewBox="0 0 200 200" class="spin-b" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.1)" stroke-width="8"/>
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.55)" stroke-width="8" stroke-dasharray="60 330" stroke-linecap="round"/>
+      <circle cx="100" cy="100" r="46" fill="none" stroke="rgba(244,63,94,.4)" stroke-width="1" stroke-dasharray="2 6"/>
+    </svg>
+    <div style="position:absolute;inset:0;display:grid;place-items:center">
+      <div style="display:grid;place-items:center;width:48px;height:48px;border-radius:99px;border:1px solid rgba(103,232,249,.5);background:#03121f;box-shadow:0 0 35px rgba(34,211,238,.55)">
+        <span id="boot-pct" style="font-family:var(--disp);font-size:13px;font-weight:900;color:#67e8f9">0</span>
+      </div>
+    </div>
+  </div>
+  <h1 class="boot-title"><span class="tx-red">DEVIL</span> <span class="tx-cy">JARVIS</span></h1>
+  <p class="boot-sub">Telegram AI Control System</p>
+  <div id="boot-lines"></div>
+  <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
+</div>
+
+<!-- offline overlay -->
+<div id="offline" class="hidden">
+  <div class="reactor" style="width:90px;height:90px">
+    <svg viewBox="0 0 200 200" class="spin-a" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(244,63,94,.6)" stroke-width="2" stroke-dasharray="50 250" stroke-linecap="round"/>
+    </svg>
+    <svg viewBox="0 0 200 200" class="spin-b" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="6" stroke-dasharray="60 330" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <h2 style="font-family:var(--disp);letter-spacing:.3em;font-size:16px" class="tx-red">BACKEND OFFLINE</h2>
+  <p class="note" style="max-width:420px;line-height:1.9">
+    Cannot reach <b style="color:#67e8f9">/health</b>. Start the JARVIS node with
+    <b style="color:#67e8f9">python main.py</b> (binds 0.0.0.0:$PORT).<br/>
+    Retrying automatically…
+  </p>
+  <button class="btn sm ghost" id="offline-retry">Retry now</button>
+</div>
+
+<div id="toasts"></div>
+
+<!-- ============ HEADER ============ -->
+<header class="top">
+  <div class="top-row">
+    <div class="brand">
+      <div class="reactor" style="width:40px;height:40px;flex:none">
+        <svg viewBox="0 0 100 100" class="spin-a" style="position:absolute;inset:0"><circle cx="50" cy="50" r="46" fill="none" stroke="rgba(34,211,238,.5)" stroke-width="2.5" stroke-dasharray="28 260" stroke-linecap="round"/><circle cx="50" cy="50" r="36" fill="none" stroke="rgba(34,211,238,.2)" stroke-width="1" stroke-dasharray="3 6"/></svg>
+        <svg viewBox="0 0 100 100" class="spin-b" style="position:absolute;inset:0"><circle cx="50" cy="50" r="26" fill="none" stroke="rgba(244,63,94,.55)" stroke-width="3" stroke-dasharray="18 145" stroke-linecap="round"/></svg>
+        <div style="position:absolute;inset:0;display:grid;place-items:center"><div style="width:11px;height:11px;border-radius:99px;background:#67e8f9;box-shadow:0 0 14px rgba(34,211,238,.9)"></div></div>
+      </div>
+      <div>
+        <h1><span class="tx-red">DEVIL</span> <span class="tx-cy">JARVIS</span></h1>
+        <small>Telegram AI Control System</small>
+      </div>
+    </div>
+    <div class="pills">
+      <div class="pill"><span class="dot dim" id="d-backend"></span><span class="k">Backend</span><b class="v dim" id="p-backend">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-telegram"></span><span class="k">Telegram</span><b class="v dim" id="p-telegram">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-auth"></span><span class="k">Auth</span><b class="v dim" id="p-auth">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-ai"></span><span class="k">AI</span><b class="v dim" id="p-ai">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-engine"></span><span class="k">Engine</span><b class="v dim" id="p-engine">…</b></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div class="clock"><span>NPT</span><b id="clock">--:--:--</b></div>
+      <button class="iconbtn" id="btn-refresh" title="Refresh status">↻ <span style="display:none" class="md-inline">Sync</span></button>
+    </div>
+  </div>
+  <div class="ticker-wrap"><div id="ticker"></div></div>
+</header>
+
+<main>
+  <div class="cols">
+    <!-- ============ LEFT ============ -->
+    <div class="stack">
+
+      <!-- TELEGRAM CONNECTION -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-conn">Telegram Connection</h2><span class="meta" id="conn-meta">MTProto</span></div>
+        <div class="p-body">
+          <!-- form view -->
+          <div id="conn-form">
+            <div class="tabs">
+              <button class="tab on" id="tab-session">Session String</button>
+              <button class="tab" id="tab-phone">Phone + OTP</button>
+            </div>
+            <!-- session flow -->
+            <div id="flow-session">
+              <label class="field"><span><span class="lb">API ID</span><span class="hint">my.telegram.org</span></span>
+                <input id="c-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">API HASH</span><span class="hint">kept secret</span></span>
+                <input id="c-apihash" type="password" placeholder="••••••••••••••••" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">Session String</span><span class="hint">Telethon</span></span>
+                <input id="c-session" type="password" placeholder="BQAAAA…" autocomplete="off"/></label>
+              <div id="conn-err" class="err-box hidden" style="margin-bottom:10px"></div>
+              <button class="btn" id="btn-connect">Connect Telegram</button>
+              <p class="note" style="margin-top:10px">A valid StringSession authorizes instantly — OTP is not
+                requested again. Credentials travel over HTTPS, are used in memory only, and are never stored or logged.</p>
+            </div>
+            <!-- phone flow -->
+            <div id="flow-phone" class="hidden">
+              <label class="field"><span><span class="lb">API ID</span></span><input id="p-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">API HASH</span></span><input id="p-apihash" type="password" placeholder="••••••••" autocomplete="off"/></label>
+              <div id="step-phone">
+                <label class="field"><span><span class="lb">Phone Number</span><span class="hint">international</span></span>
+                  <input id="p-phone" inputmode="tel" placeholder="+97798XXXXXXXX" autocomplete="off"/></label>
+                <button class="btn" id="btn-sendcode">Send OTP</button>
+              </div>
+              <div id="step-otp" class="hidden">
+                <label class="field"><span><span class="lb">OTP Code</span><span class="hint">from Telegram app</span></span>
+                  <input id="p-otp" inputmode="numeric" placeholder="12345" autocomplete="one-time-code"/></label>
+                <button class="btn" id="btn-verify">Verify OTP</button>
+              </div>
+              <div id="step-2fa" class="hidden">
+                <label class="field"><span><span class="lb">2FA Cloud Password</span><span class="hint">never stored</span></span>
+                  <input id="p-2fa" type="password" placeholder="••••••••" autocomplete="off"/></label>
+                <button class="btn" id="btn-2fa">Verify 2FA</button>
+              </div>
+              <div id="phone-err" class="err-box hidden" style="margin-top:10px"></div>
+              <div id="login-status" class="hidden step-line"><span class="dot info"></span><span id="login-status-tx"></span></div>
+              <div id="sess-reveal" class="reveal hidden">
+                <p style="font-family:var(--mono);font-size:9px;color:#fcd34d;letter-spacing:.15em;margin-bottom:6px">SESSION STRING — SHOWN ONCE, SAVE IT NOW</p>
+                <textarea id="sess-out" readonly></textarea>
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <button class="btn sm ghost" id="btn-copy-sess">Copy</button>
+                  <button class="btn sm" id="btn-hide-sess">I saved it</button>
+                </div>
+              </div>
+              <p class="note" style="margin-top:10px">Full login: API ID + API HASH → Phone → OTP → 2FA (if enabled).
+                OTP and 2FA are used in memory only — never logged, never written to disk.</p>
+            </div>
+          </div>
+          <!-- connected view -->
+          <div id="conn-account" class="hidden">
+            <div id="conn-checks"></div>
+            <div class="acct-box" style="margin:10px 0">
+              <p class="ttl">Account</p>
+              <div class="kv"><span>NAME</span><b id="ca-name">—</b></div>
+              <div class="kv"><span>USERNAME</span><b class="acc" id="ca-user">—</b></div>
+              <div class="kv"><span>USER ID</span><b id="ca-id">—</b></div>
+              <div class="kv"><span>STATUS</span><b class="acc" id="ca-state">—</b></div>
+            </div>
+            <button class="btn ghost" id="btn-disconnect">Disconnect</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- JARVIS ACCESS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-access">JARVIS Access</h2><span class="meta" id="access-meta">LOCKED</span></div>
+        <div class="p-body">
+          <div id="access-form">
+            <label class="field"><span><span class="lb">Access Token</span><span class="hint">JARVIS_ACCESS_TOKEN</span></span>
+              <input id="a-token" type="password" placeholder="••••••••" autocomplete="off"/></label>
+            <button class="btn ghost" id="btn-unlock">Unlock Console</button>
+            <div id="a-err" class="err-box hidden" style="margin-top:10px"></div>
+            <p class="note" style="margin-top:10px">User-defined secret from server environment — never hard-coded.
+              Kept in this tab's session storage only.</p>
+          </div>
+          <div id="access-on" class="hidden">
+            <p class="chk" style="font-weight:700;font-size:11px;margin-bottom:8px">✓ JARVIS ACCESS: ENABLED</p>
+            <p class="note">Token verified server-side with a timing-safe compare. Unauthorized callers are refused —
+              fail closed. Everything below honors it.</p>
+            <button class="btn ghost" id="btn-lock" style="margin-top:10px">Lock console</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACCOUNT STATUS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-account">Telegram Account Status</h2></div>
+        <div class="p-body" id="acct-body"><p class="note">Querying backend…</p></div>
+      </section>
+    </div>
+
+    <!-- ============ CENTER: CONSOLE ============ -->
+    <div class="stack">
+      <section class="panel" style="display:flex;flex-direction:column"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-console">Command Console</h2><span class="meta" id="console-meta">READY</span></div>
+        <div class="p-body" style="display:flex;flex-direction:column;gap:11px;flex:1">
+          <div id="term"></div>
+          <div id="confirm-bar" class="hidden">
+            <span style="flex:1">CONFIRM REQUIRED ▸ destructive action. Reply YES to proceed, NO to abort.</span>
+            <b id="confirm-countdown">90s</b>
+            <button class="btn sm" id="btn-confirm-yes" style="border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.15);color:#fde68a">Yes</button>
+            <button class="btn sm ghost" id="btn-confirm-no">Abort</button>
+          </div>
+          <div class="chips" id="chips"></div>
+          <div class="cmd-row">
+            <div class="inwrap"><svg id="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              <input id="cmd-input" placeholder="Ask JARVIS…  e.g. folders ke saare channel check karo" autocomplete="off" spellcheck="false"/>
+            </div>
+            <button class="btn" id="btn-exec" style="width:auto;min-width:110px">Execute</button>
+          </div>
+          <p class="note">Intents compile to validated actions only — no arbitrary code · replies also mirror to Telegram
+            Saved Messages for authorized admins.</p>
+        </div>
+        <div class="veil hidden" id="console-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Locked — unlock JARVIS access</p></div>
+      </section>
+
+      <!-- TELEGRAM TOOLS -->
+      <section class="panel" style="position:relative"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-tools">Telegram Tools</h2><span class="meta">modular registry · whitelist only</span></div>
+        <div class="p-body"><div id="tools-grid"></div>
+          <p class="note" style="margin-top:10px;border-top:1px solid rgba(255,255,255,.05);padding-top:10px">
+            Each tool declares name · description · parameters · permission · executor inside the ToolManager.
+            Destructive tools require confirmation. All tools respect Telegram permissions and FloodWait.</p>
+        </div>
+        <div class="veil hidden" id="tools-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Fail-closed — authorization required</p></div>
+      </section>
+    </div>
+
+    <!-- ============ RIGHT ============ -->
+    <div class="stack">
+      <!-- AI CONTROL -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-ai">AI Control</h2><span class="meta" id="ai-calls">0 calls</span></div>
+        <div class="p-body"><div id="ai-chain"></div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:10px">
+            <div class="stat"><p class="l">Active</p><p class="v" id="ai-active">—</p></div>
+            <div class="stat"><p class="l">Configured</p><p class="v" id="ai-conf">—</p></div>
+            <div class="stat"><p class="l">Calls</p><p class="v" id="ai-total">0</p></div>
+          </div>
+          <p class="note" style="margin-top:10px">Failover chain: GROQ → GEMINI → OPENROUTER → ANTHROPIC → HF → OPENAI.
+            Keys via environment only — never in the browser. Local intents cover NL when no cloud key exists.</p>
+        </div>
+      </section>
+
+      <!-- CROSS ENGINE -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-engine">Cross-Promotion Engine</h2><span class="meta" id="eng-state">STOPPED</span></div>
+        <div class="p-body">
+          <div style="display:flex;align-items:center;gap:16px">
+            <div style="position:relative;width:96px;height:96px;flex:none">
+              <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="7"/>
+                <circle id="gauge-arc" cx="50" cy="50" r="42" fill="none" stroke="url(#engg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 264" style="transition:stroke-dasharray .7s"/>
+                <defs><linearGradient id="engg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#f43f5e"/></linearGradient></defs>
+              </svg>
+              <div style="position:absolute;inset:0;display:grid;place-items:center;text-align:center">
+                <div><div id="gauge-pct" style="font-family:var(--disp);font-size:17px;font-weight:900">0%</div>
+                <div style="font-size:7px;font-weight:700;letter-spacing:.25em;color:var(--dim)">CYCLE</div></div>
+              </div>
+            </div>
+            <div class="stat-grid" style="flex:1">
+              <div class="stat"><p class="l">Queue</p><p class="v" id="e-queue">0</p></div>
+              <div class="stat"><p class="l">Deferred</p><p class="v" id="e-deferred">0</p></div>
+              <div class="stat"><p class="l">Processed</p><p class="v" id="e-processed">0</p></div>
+              <div class="stat"><p class="l">Failed</p><p class="v" id="e-failed">0</p></div>
+            </div>
+          </div>
+          <div id="e-flood" class="warn-box hidden" style="margin-top:10px"></div>
+          <div id="e-source-err" class="err-box hidden" style="margin-top:10px"></div>
+          <p class="note" id="e-event" style="margin-top:10px;border:1px solid rgba(255,255,255,.05);background:rgba(0,0,0,.4);border-radius:3px;padding:8px 10px">LAST EVENT ▸ —</p>
+          <div id="e-queue-list" style="margin-top:8px"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:10px">
+            <button class="btn sm" id="btn-start">Start</button>
+            <button class="btn sm ghost" id="btn-stop">Stop</button>
+            <button class="btn sm danger" id="btn-reset">Reset</button>
+          </div>
+          <div class="meter" style="margin-top:10px"><div id="e-meter" style="width:0%"></div></div>
+        </div>
+      </section>
+
+      <!-- SCHEDULER -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-sched">Scheduler</h2><span class="meta" id="sched-meta">0 active · NPT</span></div>
+        <div class="p-body">
+          <div id="jobs-empty" class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:11px">
+            No jobs armed — natural language scheduling:<br/>
+            <span style="color:rgba(34,211,238,.55)">"10 minute baad start karo"<br/>"7:30 PM par stop karo"<br/>"kal 8 baje start karo"</span>
+          </div>
+          <div id="jobs-list"></div>
+          <p class="note">Clock: Asia/Kathmandu. Jobs persist to scheduled_jobs.json, recover after restarts, and
+            never fire twice (job-id guards).</p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============ BOTTOM ============ -->
+  <div class="row2" style="margin-top:14px">
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-logs">Activity Logs</h2><span class="meta" id="logs-meta">0 events</span></div>
+      <div class="p-body" style="padding:6px 10px"><div id="logs-list" class="scrolly"></div>
+        <p class="note" style="border-top:1px solid rgba(255,255,255,.05);padding:8px 0 2px">Safe-log policy ▸ API_HASH · SESSION · OTP · 2FA · tokens never written</p>
+      </div>
+      <div class="veil hidden" id="logs-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to stream logs</p></div>
+    </section>
+
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-hist">Command History</h2><span class="meta">ai_history.json</span></div>
+      <div class="p-body" style="padding:6px 10px"><div id="hist-list" class="scrolly"></div></div>
+      <div class="veil hidden" id="hist-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to view history</p></div>
+    </section>
+
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-diag">Diagnostics</h2><span class="meta" id="diag-meta">not scanned</span></div>
+      <div class="p-body">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:11px">
+          <div style="position:relative;width:78px;height:78px;flex:none">
+            <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="8"/>
+              <circle id="diag-ring" cx="50" cy="50" r="42" fill="none" stroke="url(#dgg)" stroke-width="8" stroke-linecap="round" stroke-dasharray="0 264" style="transition:stroke-dasharray .7s"/>
+              <defs><linearGradient id="dgg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="60%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#f43f5e"/></linearGradient></defs>
+            </svg>
+            <div style="position:absolute;inset:0;display:grid;place-items:center"><b id="diag-score" style="font-family:var(--disp);font-size:15px">—</b></div>
+          </div>
+          <div style="flex:1">
+            <p class="note" style="letter-spacing:.25em">OVERALL HEALTH</p>
+            <p id="diag-verdict" style="font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.15em;color:var(--dim)">NOT SCANNED</p>
+          </div>
+          <button class="btn sm ghost" id="btn-diag">Run</button>
+        </div>
+        <div id="diag-list"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="foot">
+    <span>Fail-closed auth · JSON-only persistence · FloodWait compliant · zero secrets in DOM</span>
+    <span>./devil-jarvis v3.1 · python main.py ▸ 0.0.0.0:$PORT · NPT</span>
+  </div>
+</footer>
+
+<script>
+/* ============================================================================
+   DEVIL JARVIS — frontend controller (vanilla JS, real API integration)
+   ============================================================================ */
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------------- session-scoped state (token never localStorage) ---------------- */
+const makeSid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : 'sid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+const S = {
+  sid: sessionStorage.getItem('jv_sid') || (() => { const v = makeSid(); sessionStorage.setItem('jv_sid', v); return v; })(),
+  token: sessionStorage.getItem('jv_tok') || '',
+  auth: false,
+  up: false,          // backend reachable
+  status: null,
+  busy: false,
+  confirmUntil: 0,
+  loginId: null,
+};
+
+/* ---------------- API layer ---------------- */
+async function api(path, opts = {}) {
+  const headers = {'Content-Type': 'application/json', 'X-Session-Id': S.sid};
+  if (opts.auth && S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  let res;
+  try {
+    res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch (e) {
+    const err = new Error('NETWORK ERROR — backend unreachable'); err.net = true; throw err;
+  }
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON */ }
+  if (!res.ok) { const err = new Error(data.error || ('HTTP ' + res.status)); err.status = res.status; throw err; }
+  return data;
+}
+
+/* ---------------- toasts ---------------- */
+function toast(kind, msg) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 420); }, 4200);
+}
+
+/* ---------------- terminal ---------------- */
+function term(kind, text) {
+  const p = document.createElement('p');
+  p.className = 't-' + kind;
+  p.textContent = text;
+  const t = $('term');
+  const caret = t.querySelector('.caretline'); if (caret) caret.remove();
+  t.appendChild(p);
+  const c = document.createElement('p');
+  c.className = 'caretline'; c.innerHTML = '<span class="caret"></span>';
+  t.appendChild(c);
+  while (t.children.length > 320) t.removeChild(t.firstChild);
+  t.scrollTop = t.scrollHeight;
+}
+async function termLines(kind, lines) {
+  for (const ln of (lines || [])) { term(kind, ln); await new Promise(r => setTimeout(r, 14)); }
+}
+function busy(on) {
+  S.busy = on;
+  $('btn-exec').disabled = on || !S.auth;
+  $('console-meta').textContent = on ? 'PROCESSING' : 'READY';
+}
+
+/* ---------------- help / errors of controls ---------------- */
+function showErr(id, msg) {
+  const el = $(id);
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.textContent = msg; el.classList.remove('hidden');
+}
+
+/* ============================================================================
+   STATUS RENDERING — everything below reflects real backend data only
+   ============================================================================ */
+function pill(d, p, text, tone) { $(d).className = 'dot ' + tone; $(p).className = 'v ' + tone; $(p).textContent = text; }
+
+function renderStatus(st) {
+  S.status = st;
+  const tg = st.telegram || {};
+  const eng = st.engine || {};
+  const sched = st.scheduler || {};
+  const ai = st.ai || {};
+
+  pill('d-backend', 'p-backend', 'ONLINE', 'ok');
+  pill('d-telegram', 'p-telegram', tg.connected ? (tg.authorized ? 'CONNECTED' : 'UNAUTH') : 'OFFLINE', tg.authorized ? 'ok' : tg.connected ? 'warn' : 'dim');
+  pill('d-auth', 'p-auth', S.auth ? 'AUTHORIZED' : (st.auth_configured ? 'LOCKED' : 'UNSET'), S.auth ? 'ok' : st.auth_configured ? 'warn' : 'dim');
+  pill('d-ai', 'p-ai', ai.provider || 'LOCAL', ai.provider && ai.provider !== 'LOCAL' ? 'ok' : 'info');
+  pill('d-engine', 'p-engine', (eng.status || 'stopped').toUpperCase(), eng.status === 'running' ? 'ok' : 'dim');
+
+  /* ticker */
+  const floodS = eng.flood_wait_in ? eng.flood_wait_in + 's' : '—';
+  const items = [
+    ['ENGINE', (eng.status || 'stopped').toUpperCase(), eng.status === 'running' ? '#6ee7b7' : '#64748b'],
+    ['QUEUE', eng.queue ?? 0, '#67e8f9'], ['DEFERRED', eng.deferred ?? 0, '#fcd34d'],
+    ['PROCESSED', eng.processed ?? 0, '#6ee7b7'], ['FAILED', eng.failed ?? 0, '#fda4af'],
+    ['FLOODWAIT', floodS, eng.flood_wait_in ? '#fcd34d' : '#475569'],
+    ['SCHEDULER', (sched.active ?? 0) + ' ACTIVE', '#67e8f9'],
+    ['AI CALLS', ai.calls ?? 0, '#67e8f9'],
+    ['LAST CMD', (st.last_command || '—').slice(0, 26), '#94a3b8'],
+    ['LAST ERR', (st.last_error || 'NONE').slice(0, 26), st.last_error ? '#fda4af' : '#475569'],
+  ];
+  const half = items.map(([k, v, c]) => '<b>' + esc(k) + '</b><span style="color:' + c + '">' + esc(v) + '</span>').join('');
+  $('ticker').innerHTML = half + half;
+
+  /* account card + connection view */
+  renderAccount();
+  /* engine */
+  const total = (eng.queue || 0) + (eng.deferred || 0) + (eng.processed || 0);
+  const pct = total ? Math.round((eng.processed / total) * 100) : 0;
+  $('gauge-arc').setAttribute('stroke-dasharray', (pct / 100 * 264) + ' 264');
+  $('gauge-pct').textContent = pct + '%';
+  $('e-queue').textContent = eng.queue ?? 0;
+  $('e-deferred').textContent = eng.deferred ?? 0;
+  $('e-processed').textContent = eng.processed ?? 0;
+  $('e-failed').textContent = eng.failed ?? 0;
+  $('eng-state').textContent = (eng.status || 'stopped').toUpperCase();
+  $('e-event').textContent = 'LAST EVENT ▸ ' + (eng.last_event || '—');
+  $('e-meter').style.width = pct + '%';
+  $('btn-start').disabled = !S.auth || eng.status === 'running';
+  $('btn-stop').disabled = !S.auth || eng.status !== 'running';
+  $('btn-reset').disabled = !S.auth;
+  if (eng.flood_wait_in > 0) { $('e-flood').classList.remove('hidden'); $('e-flood').textContent = 'FLOODWAIT ▸ holding exact Telegram delay ' + eng.flood_wait_in + 's — bypass disabled by policy'; }
+  else $('e-flood').classList.add('hidden');
+  if (tg.connected && !eng.source_configured) { $('e-source-err').classList.remove('hidden'); $('e-source-err').textContent = 'SOURCE NOT AVAILABLE ▸ set SOURCE_CHAT_ID and SOURCE_MESSAGE_IDS env vars to enable cross-posting'; }
+  else $('e-source-err').classList.add('hidden');
+  /* queue depth hint */
+  $('e-queue-list').innerHTML = eng.queue > 0
+    ? '<p class="q-line"><span>targets pending delivery</span><b>' + eng.queue + ' — details via /cross status</b></p>' : '';
+
+  /* scheduler */
+  const jobs = (sched.jobs || []);
+  const act = jobs.filter(j => !j.done);
+  $('sched-meta').textContent = act.length + ' active · NPT';
+  $('jobs-empty').classList.toggle('hidden', jobs.length > 0);
+  const now = Date.now() / 1000;
+  $('jobs-list').innerHTML = jobs.slice(-6).reverse().map(j => {
+    const left = Math.max(0, Math.round(j.run_at - now));
+    const l = left >= 3600 ? Math.floor(left / 3600) + 'h ' + Math.floor(left % 3600 / 60) + 'm' : left >= 60 ? Math.floor(left / 60) + 'm ' + (left % 60) + 's' : left + 's';
+    return '<div class="job' + (j.done ? ' done' : '') + '"><div style="min-width:0"><p class="jt">[' + esc(j.id) + '] ' + esc(j.action) +
+      ' ENGINE <span style="color:#64748b">— ' + esc(j.label) + '</span></p><p class="js">' +
+      (j.done ? 'executed' : 'fires in ' + l) + '</p></div>' +
+      (j.done ? '' : '<button data-job="' + esc(j.id) + '" title="Cancel">✕</button>') + '</div>';
+  }).join('');
+  $('jobs-list').querySelectorAll('button[data-job]').forEach(b => b.onclick = () => cancelJob(b.dataset.job));
+
+  /* ai */
+  renderAI(ai);
+}
+
+function renderAI(ai) {
+  const chain = ['GROQ','GEMINI','OPENROUTER','ANTHROPIC','HUGGINGFACE','OPENAI'];
+  const conf = ai.configured || [];
+  const active = ai.provider || 'LOCAL';
+  $('ai-chain').innerHTML = chain.map((n, i) => {
+    const isOn = active === n;
+    const cfg = conf.includes(n);
+    return '<div class="ai-row' + (isOn ? ' on' : '') + '"><span class="dot ' + (isOn ? 'ok' : cfg ? 'info' : 'dim') + '"></span>' +
+      '<b>' + n + '</b><small>' + (cfg ? 'key configured' : 'no key — skipped') + '</small>' +
+      '<em class="' + (i === 0 ? 'prim' : '') + '">' + (i === 0 ? 'primary' : 'fallback ' + i) + '</em></div>';
+  }).join('');
+  $('ai-active').textContent = active;
+  $('ai-conf').textContent = conf.length + '/6';
+  $('ai-total').textContent = ai.calls ?? 0;
+  $('ai-calls').textContent = (ai.calls ?? 0) + ' calls';
+}
+
+function renderAccount() {
+  const st = S.status, tg = st && st.telegram;
+  const acc = tg && tg.account;
+  const connected = tg && tg.connected;
+  /* connection card views */
+  $('conn-form').classList.toggle('hidden', !!connected);
+  $('conn-account').classList.toggle('hidden', !connected);
+  $('conn-meta').textContent = connected ? (tg.authorized ? 'AUTHORIZED' : 'CONNECTED') : 'MTProto';
+  if (connected && acc) {
+    $('conn-checks').innerHTML = ['Telegram Connected', 'Session Valid — OTP not required', 'Credentials never stored']
+      .map(s => '<p class="chk">✓ ' + s + '</p>').join('');
+    $('ca-name').textContent = acc.name || '—';
+    $('ca-user').textContent = '@' + (acc.username || 'unknown');
+    $('ca-id').textContent = acc.user_id || '—';
+    $('ca-state').textContent = tg.authorized ? 'AUTHORIZED' : 'CONNECTED (unverified)';
+  }
+  /* account panel */
+  if (connected && acc) {
+    const initials = (acc.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    $('acct-body').innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px"><div class="avatar">' + esc(initials) + '</div>' +
+      '<div style="min-width:0"><p style="font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(acc.name) + '</p>' +
+      '<p style="font-family:var(--mono);font-size:10px;color:#67e8f9">@' + esc(acc.username || 'unknown') + '</p></div></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:var(--mono);font-size:10px">' +
+      '<div style="border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:8px"><p class="l" style="font-size:8px;letter-spacing:.25em;color:var(--dim)">AUTHORIZATION</p><p style="color:#6ee7b7;font-weight:700;margin-top:2px">' + (tg.authorized ? 'VALID' : 'PENDING') + '</p></div>' +
+      '<div style="border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:8px"><p class="l" style="font-size:8px;letter-spacing:.25em;color:var(--dim)">ADMIN SCOPE</p><p style="color:#a5f3fc;font-weight:700;margin-top:2px">ID ' + esc(String(acc.user_id)) + '</p></div></div>' +
+      '<p class="note" style="margin-top:10px">AUTHORIZED_ADMINS enforced — /AI commands are only honoured from this account\'s Saved Messages. Everyone else is ignored.</p>';
+  } else {
+    $('acct-body').innerHTML = '<p class="note">NO ACCOUNT ▸ connect with a session string or Phone + OTP to resolve identity and admin authorization. Status above is read live from the backend — nothing is hard-coded.</p>';
+  }
+}
+
+/* ============================================================================
+   POLLING — health gate + status
+   ============================================================================ */
+async function pollStatus() {
+  try {
+    const st = await api('/api/status');
+    if (!S.up) { S.up = true; $('offline').classList.add('hidden'); toast('ok', 'Backend online — JARVIS link established'); }
+    renderStatus(st);
+  } catch (e) {
+    S.up = false;
+    $('offline').classList.remove('hidden');
+    pill('d-backend', 'p-backend', 'OFFLINE', 'err');
+    pill('d-telegram', 'p-telegram', 'UNKNOWN', 'dim');
+  }
+}
+setInterval(pollStatus, 4000);
+
+/* logs + history (authorized only) */
+async function pollAudit() {
+  if (!S.auth || !S.up) return;
+  try {
+    const [lg, hs] = await Promise.all([api('/api/logs', {auth: true}), api('/api/history', {auth: true})]);
+    $('logs-meta').textContent = lg.logs.length + ' events';
+    const now = Date.now() / 1000;
+    $('logs-list').innerHTML = lg.logs.length ? lg.logs.map(l =>
+      '<div class="logrow"><span class="tag ' + esc(l.level) + '">' + esc(l.level) + '</span><span class="src">' + esc(l.source) + '</span>' +
+      '<span class="m">' + esc(l.msg) + '</span><span class="t">' + ago(l.ts, now) + '</span></div>').join('')
+      : '<p class="note" style="padding:14px;text-align:center">No events yet</p>';
+    $('hist-list').innerHTML = hs.history.length ? hs.history.map(c =>
+      '<div class="logrow"><span class="tag ' + (c.ok ? 'OK' : 'ERROR') + '">' + esc(c.action) + '</span>' +
+      '<span class="m">' + esc(c.user) + '</span><span class="t">' + ago(c.ts, now) + '</span></div>').join('')
+      : '<p class="note" style="padding:14px;text-align:center">No commands recorded yet</p>';
+  } catch (e) { if (e.status === 401) setAuth(false); }
+}
+setInterval(pollAudit, 5000);
+
+function ago(ts, now) {
+  const s = Math.max(0, Math.floor(now - ts));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+
+/* ============================================================================
+   AUTH — unlock/lock
+   ============================================================================ */
+function setAuth(on) {
+  S.auth = on;
+  ['console-veil', 'tools-veil', 'logs-veil', 'hist-veil'].forEach(id => $(id).classList.toggle('hidden', on));
+  $('cmd-input').disabled = !on; $('btn-exec').disabled = !on;
+  $('chips').querySelectorAll('button').forEach(b => b.disabled = !on);
+  $('tools-grid').querySelectorAll('button').forEach(b => b.disabled = !on);
+  $('access-form').classList.toggle('hidden', on);
+  $('access-on').classList.toggle('hidden', !on);
+  $('access-meta').textContent = on ? 'ENABLED' : 'LOCKED';
+  if (S.status) renderStatus(S.status);
+  if (on) { pollAudit(); runDiag(); }
+}
+
+$('btn-unlock').onclick = async () => {
+  const tok = $('a-token').value.trim();
+  if (!tok) return showErr('a-err', 'Enter the access token');
+  showErr('a-err', null);
+  const b = $('btn-unlock'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Verifying';
+  try {
+    const r = await api('/api/jarvis/auth', {method: 'POST', body: {token: tok}});
+    if (r.ok) {
+      S.token = tok; sessionStorage.setItem('jv_tok', tok);
+      $('a-token').value = '';
+      setAuth(true);
+      term('ok', 'AUTHORIZED ▸ welcome back, Commander');
+      toast('ok', 'JARVIS ACCESS: ENABLED');
+    }
+  } catch (e) {
+    showErr('a-err', e.message);
+    toast('err', 'Access denied — fail closed');
+  } finally { b.disabled = false; b.textContent = 'Unlock Console'; }
+};
+$('btn-lock').onclick = () => {
+  S.token = ''; sessionStorage.removeItem('jv_tok');
+  setAuth(false);
+  term('sys', 'Console locked — token cleared from session storage');
+};
+
+/* ============================================================================
+   TELEGRAM — session-string flow
+   ============================================================================ */
+$('tab-session').onclick = () => { $('tab-session').classList.add('on'); $('tab-phone').classList.remove('on'); $('flow-session').classList.remove('hidden'); $('flow-phone').classList.add('hidden'); };
+$('tab-phone').onclick = () => { $('tab-phone').classList.add('on'); $('tab-session').classList.remove('on'); $('flow-phone').classList.remove('hidden'); $('flow-session').classList.add('hidden'); };
+
+$('btn-connect').onclick = async () => {
+  const b = $('btn-connect');
+  showErr('conn-err', null);
+  b.disabled = true; b.innerHTML = '<span class="spin"></span> Negotiating…';
+  try {
+    const r = await api('/api/telegram/connect', {method: 'POST', body: {
+      api_id: $('c-apiid').value.trim(), api_hash: $('c-apihash').value, session_string: $('c-session').value }});
+    /* credentials wiped from the form immediately after use */
+    $('c-apiid').value = ''; $('c-apihash').value = ''; $('c-session').value = '';
+    toast('ok', 'Telegram connected as @' + (r.account && r.account.username));
+    term('ok', 'TELEGRAM CONNECTED ▸ session valid ▸ @' + (r.account && r.account.username));
+    await pollStatus();
+  } catch (e) {
+    showErr('conn-err', e.message);
+  } finally { b.disabled = false; b.textContent = 'Connect Telegram'; }
+};
+
+$('btn-disconnect').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const b = $('btn-disconnect'); b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+  try {
+    await api('/api/telegram/disconnect', {method: 'POST', auth: true});
+    toast('info', 'Telegram disconnected — client stopped, metadata cleared');
+    term('sys', 'TELEGRAM DISCONNECTED by operator');
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+  finally { b.disabled = false; b.textContent = 'Disconnect'; }
+};
+
+/* ============================================================================
+   TELEGRAM — phone + OTP + 2FA flow
+   ============================================================================ */
+function phoneStep(step) {
+  $('step-phone').classList.toggle('hidden', step !== 'phone');
+  $('step-otp').classList.toggle('hidden', step !== 'otp');
+  $('step-2fa').classList.toggle('hidden', step !== '2fa');
+  $('login-status').classList.toggle('hidden', !step);
+}
+function loginMsg(t) { $('login-status-tx').textContent = t; }
+async function withBtn(id, label, fn) {
+  const b = $(id); b.disabled = true; const old = b.innerHTML; b.innerHTML = '<span class="spin"></span> ' + label;
+  try { await fn(); } finally { b.disabled = false; b.innerHTML = old; }
+}
+
+$('btn-sendcode').onclick = () => withBtn('btn-sendcode', 'Sending…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/send_code', {method: 'POST', body: {
+      api_id: $('p-apiid').value.trim(), api_hash: $('p-apihash').value, phone: $('p-phone').value.trim() }});
+    S.loginId = r.login_id;
+    phoneStep('otp'); loginMsg('OTP sent by Telegram — check your app (5 min window)');
+    $('p-otp').focus();
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+$('btn-verify').onclick = () => withBtn('btn-verify', 'Verifying…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/verify_code', {method: 'POST', body: {login_id: S.loginId, code: $('p-otp').value.trim()}});
+    $('p-otp').value = '';
+    if (r.needs_2fa) {
+      phoneStep('2fa'); loginMsg('OTP accepted — account requires 2FA password');
+      $('p-2fa').focus();
+      return;
+    }
+    finishLogin(r);
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+$('btn-2fa').onclick = () => withBtn('btn-2fa', 'Verifying…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/verify_2fa', {method: 'POST', body: {login_id: S.loginId, password: $('p-2fa').value}});
+    $('p-2fa').value = '';
+    finishLogin(r);
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+function finishLogin(r) {
+  phoneStep(null);
+  $('p-apiid').value = ''; $('p-apihash').value = ''; $('p-phone').value = '';
+  toast('ok', 'Telegram authorized as @' + (r.account && r.account.username));
+  term('ok', 'TELEGRAM AUTHORIZED ▸ @' + (r.account && r.account.username) + ' — session string shown once in the form');
+  if (r.session_string) {
+    $('sess-out').value = r.session_string;
+    $('sess-reveal').classList.remove('hidden');
+  }
+  pollStatus();
+}
+$('btn-copy-sess').onclick = async () => {
+  try { await navigator.clipboard.writeText($('sess-out').value); toast('ok', 'Session string copied — store it somewhere safe'); }
+  catch { $('sess-out').select(); document.execCommand('copy'); toast('info', 'Session string copied'); }
+};
+$('btn-hide-sess').onclick = () => { $('sess-out').value = ''; $('sess-reveal').classList.add('hidden'); toast('info', 'Session string wiped from the page'); };
+
+/* ============================================================================
+   COMMANDS — console + confirmation flow (origin-bound, expiring)
+   ============================================================================ */
+async function sendCommand(raw) {
+  raw = (raw || '').trim();
+  if (!raw || S.busy) return;
+  if (!S.auth) { term('err', 'ACCESS DENIED ▸ unlock JARVIS access first (fail closed)'); return; }
+  term('user', raw);
+  busy(true);
+  hideConfirm();
+  $('term').insertAdjacentHTML('beforeend', '<p id="thinking" class="t-sys"><span class="typing"><i></i><i></i><i></i></span> JARVIS resolving intent…</p>');
+  $('term').scrollTop = $('term').scrollHeight;
+  try {
+    const r = await api('/api/jarvis/command', {method: 'POST', auth: true, body: {command: raw}});
+    const th = $('thinking'); if (th) th.remove();
+    await termLines(r.ok ? 'jarvis' : 'err', r.lines || []);
+    if (r.requires_confirmation) showConfirm(r.confirm_expires_in || 90);
+    pollStatus();
+  } catch (e) {
+    const th = $('thinking'); if (th) th.remove();
+    if (e.status === 401) { setAuth(false); term('err', 'SESSION EXPIRED ▸ unlock again'); }
+    else term('err', 'ERROR ▸ ' + e.message);
+  } finally { busy(false); }
+}
+
+let confirmTimer = null;
+function showConfirm(secs) {
+  S.confirmUntil = Date.now() + secs * 1000;
+  $('confirm-bar').classList.remove('hidden');
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((S.confirmUntil - Date.now()) / 1000));
+    $('confirm-countdown').textContent = left + 's';
+    if (left <= 0) { hideConfirm(); term('err', 'CONFIRMATION EXPIRED ▸ issue the command again'); }
+  };
+  confirmTimer = setInterval(tick, 1000); tick();
+}
+function hideConfirm() { $('confirm-bar').classList.add('hidden'); if (confirmTimer) { clearInterval(confirmTimer); confirmTimer = null; } }
+$('btn-confirm-yes').onclick = () => { hideConfirm(); sendCommand('yes'); };
+$('btn-confirm-no').onclick = () => { hideConfirm(); sendCommand('no'); };
+
+$('btn-exec').onclick = () => { const v = $('cmd-input').value; $('cmd-input').value = ''; sendCommand(v); };
+$('cmd-input').addEventListener('keydown', e => { if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; sendCommand(v); } });
+
+/* chips */
+[['STATUS','/AI STATUS'],['FOLDERS','/AI FOLDERS'],['DEAD SCAN','/AI DEAD CHANNELS'],['DIAG','/AI DIAGNOSTICS'],
+ ['CROSS','/cross status'],['हिंदी','dead channels ki list banao'],['SCHEDULE','10 minute baad start karo'],['HELP','/AI HELP']]
+.forEach(([l, c]) => {
+  const b = document.createElement('button');
+  b.className = 'chip'; b.textContent = l; b.disabled = true;
+  b.onclick = () => sendCommand(c);
+  $('chips').appendChild(b);
+});
+
+/* tools grid */
+const TOOLS = [
+  ['/AI STATUS','STATUS','Full live system report','activity'],
+  ['/AI ACCOUNT','ACCOUNT','Identity, auth scope','user'],
+  ['/AI FOLDERS','FOLDERS','Dialog folders + counts','folder'],
+  ['/AI FOLDERS CHANNELS','CHANNEL LIST','Every folder channel','list'],
+  ['/AI DEAD CHANNELS','DEAD SCAN','Inactive / restricted','scan',1],
+  ['/AI SEARCH promo','MSG SEARCH','Readable message search','search'],
+  ['/AI RECENT ACTIVITY','RECENT','Latest posting activity','pulse'],
+  ['/AI SAVED MESSAGES','SAVED MSGS','Command inbox monitor','inbox'],
+  ['/AI SCHEDULE LIST','JOBS','Scheduled job registry','clock'],
+  ['/AI DIAGNOSTICS','DIAG','PASS / WARN / FAIL sweep','alert'],
+  ['/AI SAVE STATE','SAVE','Atomic JSON persistence','save'],
+  ['/AI HELP','HELP','Full command matrix','term'],
+];
+const ICONS = {
+  activity:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  user:'<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  scan:'<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  pulse:'<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4M12 17h.01"/>',
+  save:'<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  term:'<path d="m4 17 6-6-6-6M12 19h8"/>',
+};
+TOOLS.forEach(([cmd, name, desc, icon, red]) => {
+  const b = document.createElement('button');
+  b.className = 'tile' + (red ? ' red' : ''); b.disabled = true;
+  b.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICONS[icon] + '</svg><b>' + name + '</b><span>' + desc + '</span>';
+  b.onclick = () => sendCommand(cmd);
+  $('tools-grid').appendChild(b);
+});
+
+/* engine quick controls — routed through console for unified confirmation */
+$('btn-start').onclick = () => sendCommand('/cross start');
+$('btn-stop').onclick = () => sendCommand('/cross stop');
+$('btn-reset').onclick = () => sendCommand('/cross reset');
+
+/* scheduler cancel */
+async function cancelJob(id) {
+  try {
+    const r = await api('/api/scheduler/cancel', {method: 'POST', auth: true, body: {id}});
+    toast('ok', r.message || 'Job cancelled');
+    pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+/* ============================================================================
+   DIAGNOSTICS
+   ============================================================================ */
+async function runDiag() {
+  if (!S.up) return;
+  const b = $('btn-diag'); b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+  try {
+    const d = await api('/api/diagnostics');
+    $('diag-ring').setAttribute('stroke-dasharray', (d.score / 100 * 264) + ' 264');
+    $('diag-score').textContent = d.score + '%';
+    const v = d.score >= 85 ? ['NOMINAL', '#6ee7b7'] : d.score >= 60 ? ['DEGRADED', '#fcd34d'] : ['CRITICAL', '#fda4af'];
+    $('diag-verdict').textContent = v[0]; $('diag-verdict').style.color = v[1];
+    const pass = d.checks.filter(c => c.status === 'PASS').length;
+    const warn = d.checks.filter(c => c.status === 'WARN').length;
+    const fail = d.checks.filter(c => c.status === 'FAIL').length;
+    $('diag-meta').textContent = pass + ' pass · ' + warn + ' warn · ' + fail + ' fail';
+    $('diag-list').innerHTML = d.checks.map(c =>
+      '<div class="diag-row"><span class="st ' + c.status + '">' + c.status + '</span><b>' + esc(c.name) + '</b><span title="' + esc(c.detail) + '">' + esc(c.detail) + '</span></div>').join('');
+  } catch (e) { toast('err', 'Diagnostics failed: ' + e.message); }
+  finally { b.disabled = false; b.textContent = 'Run'; }
+}
+$('btn-diag').onclick = runDiag;
+$('btn-refresh').onclick = () => { pollStatus(); pollAudit(); };
+$('offline-retry').onclick = pollStatus;
+
+/* ============================================================================
+   CLOCK (Asia/Kathmandu) + particles + boot
+   ============================================================================ */
+const ktm = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false});
+setInterval(() => { $('clock').textContent = ktm.format(new Date()); }, 1000);
+$('clock').textContent = ktm.format(new Date());
+
+(function particles() {
+  const cv = $('stars'), ctx = cv.getContext('2d');
+  let W, H, P = [];
+  const rs = () => {
+    W = cv.width = innerWidth; H = cv.height = innerHeight;
+    const n = Math.min(70, Math.floor(W * H / 26000));
+    P = Array.from({length: n}, () => ({x: Math.random() * W, y: Math.random() * H, vy: .08 + Math.random() * .25, r: .6 + Math.random() * 1.4, a: .1 + Math.random() * .3, red: Math.random() > .88}));
+  };
+  rs(); addEventListener('resize', rs);
+  (function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const p of P) {
+      p.y -= p.vy; if (p.y < -4) { p.y = H + 4; p.x = Math.random() * W; }
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.283);
+      ctx.fillStyle = p.red ? 'rgba(255,60,80,' + p.a + ')' : 'rgba(56,205,255,' + p.a + ')';
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  })();
+})();
+
+(function boot() {
+  const lines = ['DEVIL JARVIS CORE v3.1','Mounting Telegram Tool Manager…','JSON persistence layer … OK','AI fallback chain — GROQ primary','Scheduler online · Asia/Kathmandu','Fail-closed authorization … ARMED','Uplink ready'];
+  lines.forEach((l, i) => setTimeout(() => {
+    const p = document.createElement('p'); p.textContent = '▸ ' + l + (i < lines.length - 1 ? '  OK' : '');
+    $('boot-lines').appendChild(p);
+  }, 180 * i + 150));
+  let pct = 0;
+  const iv = setInterval(() => {
+    pct = Math.min(100, pct + 3 + Math.floor(Math.random() * 4));
+    $('boot-pct').textContent = pct; $('boot-bar').style.width = pct + '%';
+    if (pct >= 100) clearInterval(iv);
+  }, 42);
+  setTimeout(() => $('boot').classList.add('fade'), 1900);
+  setTimeout(() => $('boot').remove(), 2500);
+})();
+
+/* greeting + first sync */
+term('sys', 'DEVIL JARVIS CORE v3.1 — Telegram AI Control System');
+term('sys', 'Single-file deployment ▸ web UI + API served by python main.py');
+term('sys', 'Status is read live from the backend every 4s — nothing hard-coded.');
+term('sys', 'Type "help" — JARVIS understands English, Hindi and Hinglish.');
+pollStatus();
+if (S.token) {
+  api('/api/jarvis/auth', {method: 'POST', body: {token: S.token}})
+    .then(() => setAuth(true))
+    .catch(() => { sessionStorage.removeItem('jv_tok'); S.token = ''; setAuth(false); });
+} else setAuth(false);
+</script>
+</body>
+</html>
