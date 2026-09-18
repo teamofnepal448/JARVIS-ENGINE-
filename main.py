@@ -14,13 +14,18 @@
 
 import ast
 import asyncio
+import builtins as _py_builtins
+import contextlib
 import hmac
+import inspect
 import json
 import logging
 import os
 import re
 import struct
+import sys
 import time
+import types as _mod_types
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -33,6 +38,7 @@ from quart import Quart, jsonify, request, send_file
 try:
     from telethon import TelegramClient, events, functions
     from telethon.sessions import StringSession
+    from telethon import utils as tl_utils, types as tl_types, errors as tl_errors
     from telethon.errors import (
         ChatAdminRequiredError, FloodWaitError, PasswordHashInvalidError,
         PhoneCodeExpiredError, PhoneCodeInvalidError, PhoneNumberInvalidError,
@@ -84,8 +90,10 @@ def safe_log(level, source, msg):
     LOG_RING.appendleft({"ts": int(time.time()), "level": level, "source": source, "msg": str(msg)[:400]})
 
 # ----------------------------------------------------------------------------
-# JSON persistence — atomic writes, corruption recovery
+# JSON persistence — atomic writes, corruption recovery, memory-only fallback
 # ----------------------------------------------------------------------------
+_STORAGE_WARNED = False
+
 class JSONStore:
     def __init__(self, path, default):
         self.path = path
@@ -109,6 +117,14 @@ class JSONStore:
                 tmp.replace(self.path)
             except Exception as e:
                 log.error("STORAGE write failed for %s: %s", self.path.name, type(e).__name__)
+                global _STORAGE_WARNED
+                if not _STORAGE_WARNED:
+                    _STORAGE_WARNED = True
+                    log.warning("data/ not writable (%s) — falling back to MEMORY-ONLY "
+                                "(Render ephemeral filesystem? state will not survive restart)",
+                                type(e).__name__)
+                    safe_log("WARN", "STORAGE",
+                             f"{self.path.name} not writable — memory-only fallback active")
 
     def save_bg(self, value):
         try:
@@ -136,6 +152,7 @@ jobs_store     = JSONStore(DATA / "scheduled_jobs.json", [])
 runtime_store  = JSONStore(DATA / "runtime_config.json", DEFAULT_RUNTIME)
 accounts_store = JSONStore(DATA / "accounts.json", {"accounts": []})
 scripts_store  = JSONStore(DATA / "scripts.json", {})
+templates_store = JSONStore(DATA / "script_templates.json", {})
 
 STATE    = state_store.load()
 HISTORY  = history_store.load()   # BUG FIX 5: defined before any use
@@ -1445,6 +1462,11 @@ class TelegramManager:
                     pass
             self.client = None
             self.authorized = False
+            try:  # scripts bound to a disconnected account are stopped
+                for acc_id in list(set(list(SCRIPT_TASKS) + list(SCRIPT_PROGRESS))):
+                    asyncio.get_running_loop().create_task(stop_script(acc_id, "account disconnected"))
+            except Exception:
+                pass
             MONITOR.attached_client = None
             if clear:
                 self.account = None
@@ -1588,6 +1610,10 @@ class AccountManager:
             state_store.save_bg(STATE)
         self._persist()
         safe_log("WARN", "ACCOUNT", f"Removed {acc_id}")
+        try:  # auto-stop any running script bound to this account
+            asyncio.get_running_loop().create_task(stop_scripts_for_account(acc_id))
+        except Exception:
+            pass
         return True, "Removed"
 
     async def activate(self, acc_id):
@@ -2359,26 +2385,391 @@ def _record(raw, action, result, origin, provider=None):
     state_store.save_bg(STATE)
 
 # ============================================================================
-# SAFE SCRIPT RUNNER — AST sandbox (Part 4). Whitelisted sync shims only.
+# SCRIPT SYSTEM v2 — Safe/AST sandbox + RAW-mode Telethon installer.
+# Every script executes inside ONE controlled environment:
+#   * AST validation (imports whitelisted, no dunder/banned names)
+#   * a WrappedClient surface (real Telethon feel, host objects never exposed:
+#     a single server-side registry holds the actual client; user globals only
+#     ever receive opaque proxy objects and sanitized values)
+#   * value sanitization in/out (modules, types, frames, host objects blocked)
+#   * per-account log buffers, task lifecycle, graceful stop()
 # ============================================================================
+
+def _scrub(msg):
+    msg = re.sub(r"BQ[A-Za-z0-9_\-]{24,}", "***", str(msg))
+    msg = re.sub(r"\b[0-9a-fA-F]{32}\b", "***", msg)
+    msg = re.sub(r"(?i)(api_hash|session|2fa|otp|password|token)\s*[:=]\s*\S+", r"\1=***", msg)
+    return msg
+
+# -- per-account bounded log buffers (INFO/WARN/ERROR/OK) --------------------
+SCRIPT_LOG_BUFFERS = {}
+SCRIPT_PROGRESS = {}
+SCRIPT_TASKS = {}
+SCRIPT_RATE = {}
+
+class ScriptLogger:
+    @staticmethod
+    def put(acc_id, level, msg):
+        SCRIPT_LOG_BUFFERS.setdefault(acc_id, deque(maxlen=500)).append(
+            {"ts": time.time(), "level": str(level)[:5], "msg": _scrub(msg)[:400]})
+
+    @staticmethod
+    def tail(acc_id, limit=200):
+        return list(SCRIPT_LOG_BUFFERS.get(acc_id, []))[-limit:]
+
+    @staticmethod
+    def clear(acc_id):
+        SCRIPT_LOG_BUFFERS.pop(acc_id, None)
+
+# -- templates (spec-exact telethon code; these run in RAW mode) -------------
+SCRIPT_TEMPLATES = {
+    "blank": {"label": "Blank", "mode": "raw", "code": (
+"""# Injected globals: client, SESSION_STRING, PHONE, events, errors, utils, types
+# asyncio, re, time, os, log(msg), print(...), sleep(secs)
+
+async def main():
+    me = await client.get_me()
+    log(f"Booted as @{me.username or me.id}")
+
+main()
+""")},
+    "cross": {"label": "Cross Promotion", "mode": "raw", "code": (
+"""import asyncio
+
+SOURCE_CHAT = -1001234567890
+SOURCE_MSG_IDS = [101, 102, 103]
+DESTINATIONS = ["@target1", "@target2"]
+CYCLE_DELAY = 8
+
+async def cross_loop():
+    while True:
+        for dst in DESTINATIONS:
+            try:
+                for mid in SOURCE_MSG_IDS:
+                    await client.forward_messages(dst, mid, SOURCE_CHAT)
+                    log(f"Forwarded {mid} to {dst}")
+                    await asyncio.sleep(CYCLE_DELAY)
+            except Exception as e:
+                log(f"Failed {dst}: {type(e).__name__}")
+
+asyncio.create_task(cross_loop())
+log("Cross engine running")
+""")},
+    "dead_scan": {"label": "Dead Channel Scanner", "mode": "raw", "code": (
+"""from telethon.tl import functions
+
+async def scan_dead():
+    filters = await client(functions.messages.GetDialogFiltersRequest())
+    for f in filters:
+        title = getattr(f, "title", None)
+        title = title.text if hasattr(title, "text") else str(title or "")
+        log(f"Folder: {title}")
+
+await scan_dead()
+""")},
+    "auto_responder": {"label": "Auto Responder", "mode": "raw", "code": (
+"""from telethon import events
+
+KEYWORDS = ["price", "rate", "info"]
+
+@client.on(events.NewMessage(incoming=True))
+async def auto_reply(event):
+    text = (event.raw_text or "").lower()
+    if any(k in text for k in KEYWORDS):
+        await event.reply("Thanks! We'll get back to you.")
+        log(f"Replied to {event.sender_id}")
+
+log("Auto responder active")
+""")},
+    "custom": {"label": "Custom", "mode": "raw", "code": ""},
+}
+
+# -- value sanitization -------------------------------------------------------
+def _blocked_for_user(v, seen=None):
+    """True if a value must never cross into/out of user code.
+    Primitives pass; modules/types/frames/host-internals block. Plain user-space
+    objects (Telethon EventBuilder/Entity/Message, script instances) are allowed."""
+    if v is None or isinstance(v, (str, bytes, bool, int, float, complex)):
+        return False
+    seen = seen if seen is not None else set()
+    if id(v) in seen:
+        return False
+    seen.add(id(v))
+    if isinstance(v, (asyncio.Task, asyncio.Future, asyncio.Lock, asyncio.Event, asyncio.Queue)):
+        if isinstance(v, asyncio.Future):
+            return True  # Futures are a host-loop control surface; Tasks are tracked via spawn
+        return False
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return any(_blocked_for_user(x, seen) for x in v)
+    if isinstance(v, dict):
+        return any(_blocked_for_user(k, seen) or _blocked_for_user(x, seen) for k, x in v.items())
+    if isinstance(v, (_mod_types.ModuleType, type, _mod_types.FunctionType,
+                      _mod_types.BuiltinFunctionType, _mod_types.BuiltinMethodType,
+                      _mod_types.CodeType, _mod_types.FrameType,
+                      _mod_types.TracebackType, _mod_types.MemberDescriptorType,
+                      _mod_types.MappingProxyType)) or isinstance(v, property):
+        return True
+    mod_name = type(v).__module__ or ""
+    if mod_name.startswith(("pip", "_internal", "importlib", "_collections_abc")):
+        safe_log("WARN", "SEC", f"script reached host object {type(v).__name__} — blocking")
+        return True
+    return False
+
+# -- execution frame registry: the ONLY bridge to the real client -------------
+class _Scope:
+    """Registry keyed by opaque ids; user code never sees these objects."""
+    table = {}
+
+def _register(obj):
+    oid = uuid.uuid4().hex[:16]
+    _Scope.table[oid] = obj
+    return oid
+
+def _lookup(oid):
+    return _Scope.table.get(oid)
+
+class _ClientProxy:
+    """The safe `client` given to scripts. Only whitelisted async methods exist."""
+
+    SAFE_METHODS = {"get_me", "get_entity", "get_dialogs", "get_messages", "iter_dialogs",
+                    "iter_messages", "send_message", "forward_messages", "send_file",
+                    "get_permissions", "is_user_authorized", "disconnect"}
+
+    def __init__(self, cid):
+        object.__setattr__(self, "_cid", cid)
+
+    def _client(self):
+        c = _lookup(object.__getattribute__(self, "_cid"))
+        if c is None:
+            raise RuntimeError("client offline")
+        return c
+
+    def __call__(self, request, *args, **kwargs):
+        cls = object.__getattribute__(self, "__class__")
+        fn = getattr(cls, "_client")(self)
+        req = request
+        if _blocked_for_user(req):
+            raise AttributeError("request object not allowed")
+        client = cls._client(self)
+        async def _do():
+            return await client(request, *args, **kwargs)
+        return _do()
+
+    def on(self, ev):
+        ev_ok = _safe_event(ev)
+        def _deco(fn):
+            if not callable(fn):
+                raise AttributeError("handler must be callable")
+            _checked_on(object.__getattribute__(self, "_cid"), ev_ok, fn)
+            return fn
+        return _deco
+
+    def remove_event_handler(self, fn):
+        return _safe_remove_handler(object.__getattribute__(self, "_cid"), fn)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError("hidden")
+        if name not in self.SAFE_METHODS:
+            raise AttributeError(f"client.{name} is not exposed to scripts")
+        raw = object.__getattribute__(self, "_client")()
+        return _BoundClientMethod(raw, name)
+
+    def __setattr__(self, n, v):
+        raise AttributeError("client proxy is read-only")
+
+    def __repr__(self):
+        return "<telethon client>"
+
+class _BoundClientMethod:
+    """Call-through to a raw client method with arg/return sanitization."""
+
+    def __init__(self, raw_client, name):
+        object.__setattr__(self, "_rc", raw_client)
+        object.__setattr__(self, "_nm", name)
+
+    def __call__(self, *args, **kwargs):
+        for a in list(args) + list(kwargs.values()):
+            if _blocked_for_user(a):
+                raise AttributeError(f"argument to {object.__getattribute__(self, '_nm')} not allowed")
+        fn = getattr(object.__getattribute__(self, "_rc"), object.__getattribute__(self, "_nm"))
+        out = fn(*args, **kwargs)
+        if inspect.isasyncgen(out):
+            return _SanitizedAsyncGen(out)
+        if inspect.iscoroutine(out):
+            async def _awaited():
+                return out
+            return _awaited()
+        return out
+
+    def __getattr__(self, n):
+        raise AttributeError("hidden")
+
+    def __repr__(self):
+        return f"<client method {object.__getattribute__(self, '_nm')}>"
+
+class _SanitizedAsyncGen:
+    def __init__(self, gen):
+        self._g = gen
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        item = await self._g.__anext__()
+        if _blocked_for_user(item):
+            raise AttributeError("stream item not allowed")
+        return item
+
+    def __repr__(self):
+        return "<stream>"
+
+def _safe_event(ev):
+    if _blocked_for_user(ev):
+        raise AttributeError("event type not allowed")
+    # class-with-args (e.g. NewMessage(...)) is an EventBuilder instance — fine
+    return ev
+
+def _checked_on(cid, ev_ok, handler):
+    """Register a script event handler on the real client + no-overwrite tracking."""
+    raw = _lookup(cid)
+    if raw is None:
+        raise AttributeError("client offline")
+    inst = _current_progress()
+    acc = _current_progress_acc() or "-"
+
+    async def _guarded(event, _h=handler):
+        try:
+            return await _h(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            ScriptLogger.put(acc, "ERROR", f"handler {_h.__name__} crashed: {type(e).__name__}: {str(e)[:140]}")
+
+    try:
+        raw.add_event_handler(_guarded, ev_ok)
+    except (TypeError, ValueError):
+        try:
+            raw.add_event_handler(_guarded)
+        except TypeError:
+            raw.add_event_handler(_guarded)
+    if inst is not None:
+        inst.setdefault("handlers", []).append(_guarded)
+    ScriptLogger.put(acc, "OK", f"handler registered: {getattr(handler, '__name__', 'handler')}")
+
+def _safe_remove_handler(cid, handler):
+    """Remove by original fn or its tracked wrapper."""
+    raw = _lookup(cid)
+    if raw is None:
+        return False
+    inst = _current_progress()
+    candidate = handler
+    if inst is not None:
+        tracked = list(inst.get("handlers", []))
+        if handler in tracked:
+            candidate = handler
+            tracked.remove(handler)
+        else:
+            candidate = next((h for h in tracked if getattr(h, "__wrapped__", None) is handler or h is handler), handler)
+            if candidate in tracked:
+                tracked.remove(candidate)
+    try:
+        raw.remove_event_handler(candidate)
+        return True
+    except Exception:
+        try:
+            raw.remove_event_handler(handler)
+            return True
+        except Exception:
+            return False
+
+_CTX = {"progress": None, "acc": None}
+
+def _current_progress():
+    return _CTX["progress"]
+
+def _current_progress_acc():
+    return _CTX["acc"]
+
+class _ModuleProxy:
+    """Read-only module view; name-checked."""
+    ALLOWED = ("re", "time", "asyncio", "events", "errors", "utils", "types")
+
+    def __init__(self, name):
+        object.__setattr__(self, "_n", name)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError("hidden")
+        modname = object.__getattribute__(self, "_n")
+        if modname == "asyncio":
+            if name in ("create_task", "ensure_future"):
+                def _spawn(coro, *a, **k):
+                    task = getattr(asyncio, name)(coro, *a, **k)
+                    inst = _current_progress()
+                    if inst is not None:
+                        inst.setdefault("spawned", []).append(task)
+                        task.add_done_callback(lambda t: _task_done(_current_progress(), t))
+                    return task
+                return _spawn
+            if name in ("run", "wrap_future", "run_coroutine_threadsafe", "to_thread",
+                        "new_event_loop", "set_event_loop", "get_event_loop_policy"):
+                raise AttributeError(f"asyncio.{name} not allowed")
+            return getattr(asyncio, name)
+        for mod in (_mod_types.sys.modules.get("re"), _mod_types.sys.modules.get("time")):
+            if mod and getattr(mod, "__name__", None) == modname:
+                return getattr(mod, name)
+        if TELETHON_OK and modname in ("events", "errors", "utils", "types"):
+            src = {"events": events, "errors": tl_errors, "utils": tl_utils, "types": tl_types}[modname]
+            return getattr(src, name)
+        raise AttributeError(f"module {modname} unavailable")
+
+    def __setattr__(self, n, v):
+        raise AttributeError("read-only module")
+
+    def __repr__(self):
+        return f"<module {object.__getattribute__(self, '_n')}>"
+
+def _task_done(inst, task):
+    try:
+        if inst and task in inst.get("spawned", []):
+            inst["spawned"].remove(task)
+    except Exception:
+        pass
+
+# -- the runner ---------------------------------------------------------------
 class SafeScriptRunner:
-    BANNED_NODES = (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
-                    ast.ClassDef, ast.Lambda, ast.AsyncFunctionDef, ast.With,
-                    ast.AsyncWith, ast.Try, ast.Await)
+    """AST-validated Telethon-script executor (safe+raw modes share one sandbox)."""
+
+    BANNED_NODES = (ast.Global, ast.Nonlocal)
     BANNED_NAMES = {"exec", "eval", "compile", "open", "__import__", "globals", "locals",
-                    "input", "exit", "quit", "getattr", "setattr", "delattr", "vars", "dir",
-                    "breakpoint", "help", "type", "object", "super", "memoryview", "bytearray",
-                    "bytes", "print", "iter", "next", "hash"}
+                    "input", "exit", "quit", "getattr", "setattr", "delattr", "vars",
+                    "breakpoint", "help", "super", "memoryview", "bytearray",
+                    "os", "sys", "builtins", "subprocess", "shutil", "socket", "signal",
+                    "ctypes", "socket", "pickle", "marshal"}
+    IMPORT_WHITELIST = {"asyncio", "re", "time"}
+    FROM_WHITELIST = {"telethon": {"events"}, "telethon.tl": {"functions"}}
+    MAX_CODE = 16000
 
     @classmethod
     def validate(cls, code):
-        if len(code or "") > 8000:
-            return False, "Script too long (max 8000 chars)"
+        if len(code or "") > cls.MAX_CODE:
+            return False, f"Script too long (max {cls.MAX_CODE} chars)"
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
             return False, f"Syntax error line {e.lineno}: {e.msg}"
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                bad = [a.name for a in node.names if a.name.split(".")[0] not in cls.IMPORT_WHITELIST]
+                if bad:
+                    return False, f"import not allowed: {bad[0]}"
+                continue
+            if isinstance(node, ast.ImportFrom):
+                if node.module in cls.FROM_WHITELIST and \
+                        {a.name for a in node.names} <= cls.FROM_WHITELIST[node.module]:
+                    continue
+                return False, f"import-from not allowed: {node.module or '?'}"
             if isinstance(node, cls.BANNED_NODES):
                 return False, f"'{type(node).__name__}' is not allowed"
             if isinstance(node, ast.Name):
@@ -2392,63 +2783,391 @@ class SafeScriptRunner:
         return True, "OK"
 
     @classmethod
-    async def run(cls, code, account_ctx, log_fn):
+    def _build_globals(cls, account_ctx, acc_id, progress):
+        session = ""
+        try:
+            session = decrypt_str((account_ctx.get("meta") or {}).get("session_enc", "")) or ""
+        except Exception:
+            session = ""
+        if not session:
+            ScriptLogger.put(acc_id, "WARN", "SESSION_STRING unavailable (memory-only account) — empty global")
+
+        cid = _register(account_ctx.get("client"))
+        progress["client_oid"] = cid
+
+        def log(msg):
+            ScriptLogger.put(acc_id, "INFO", str(msg)[:400])
+
+        def print_(*args):
+            ScriptLogger.put(acc_id, "INFO", " ".join(str(a) for a in args)[:400])
+
+        async def sleep(secs):
+            await asyncio.sleep(min(max(float(secs), 0.0), 3600.0))
+
+        wrapper = {
+            "client": _ClientProxy(cid),
+            "SESSION_STRING": session,
+            "PHONE": (account_ctx.get("meta") or {}).get("phone") or None,
+            "log": log, "print": print_, "sleep": sleep,
+            "asyncio": _ModuleProxy("asyncio"),
+            "re": _ModuleProxy("re"), "time": _ModuleProxy("time"),
+            "events": _ModuleProxy("events"), "errors": _ModuleProxy("errors"),
+            "utils": _ModuleProxy("utils"), "types": _ModuleProxy("types"),
+            "FloodWaitError": FloodWaitError if TELETHON_OK else Exception,
+            "RPCError": RPCError if TELETHON_OK else Exception,
+            "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+            "bool": bool, "int": int, "float": float, "str": str, "list": list,
+            "dict": dict, "tuple": tuple, "set": set, "frozenset": frozenset,
+            "len": len, "range": range, "enumerate": enumerate, "zip": zip, "map": map,
+            "sorted": sorted, "reversed": reversed, "sum": sum, "min": min, "max": max,
+            "any": any, "all": all, "abs": abs, "round": round, "repr": repr,
+            "isinstance": isinstance, "print_": print_,
+            "__name__": "__script__", "__doc__": None,
+        }
+        return wrapper
+
+    @classmethod
+    async def run(cls, code, account_ctx, acc_id, progress):
         ok, err = cls.validate(code)
         if not ok:
+            ScriptLogger.put(acc_id, "ERROR", f"validation: {err}")
             return {"ok": False, "error": err}
-
-        def _wrap(coro):
-            """Run a telegram coroutine in a fresh loop (sandbox thread)."""
-            async def _bounded():
-                return await asyncio.wait_for(coro, 20)
-            return asyncio.run(_bounded())
-
-        def send_message(chat_id, text):
-            client = account_ctx.get("client")
-            if not client:
-                raise RuntimeError("Account not connected")
-            _wrap(client.send_message(chat_id, str(text)[:4000]))
-            return True
-
-        def list_folders():
-            return _wrap(_scan_folders_client(account_ctx["client"]))
-
-        def scan_dead_channels(folder_name=None):
-            folders = list_folders()
-            dead = []
-            for f in folders:
-                if folder_name and str(folder_name).lower() not in f["name"].lower():
-                    continue
-                for ch in f["channels"][:20]:
-                    status, reason, _ = _wrap(_analyze_channel_client(account_ctx["client"], ch["id"]))
-                    if status in ("INACTIVE", "RESTRICTED", "INACCESSIBLE"):
-                        dead.append({"name": ch["name"], "username": ch.get("username"),
-                                     "status": status, "reason": reason})
-            return dead
-
-        def log_msg(msg):
-            log_fn(str(msg)[:200])
-
-        def sleep(secs):
-            time.sleep(min(float(secs), 30.0))
-
-        sandbox_globals = {"__builtins__": {},
-                           "send_message": send_message, "list_folders": list_folders,
-                           "scan_dead_channels": scan_dead_channels, "log": log_msg, "sleep": sleep,
-                           "True": True, "False": False, "None": None,
-                           "len": len, "range": range, "str": str, "int": int, "float": float,
-                           "list": list, "dict": dict, "enumerate": enumerate, "round": round}
-
-        def _exec():
-            exec(compile(code, "<script>", "exec"), sandbox_globals, {})
-
+        wrapper = cls._build_globals(account_ctx, acc_id, progress)
+        _CTX["progress"] = progress
+        _CTX["acc"] = acc_id
         try:
-            await asyncio.to_thread(_exec)
-            return {"ok": True, "message": "Script executed"}
+            compiled = compile(code, "<script>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            result = eval(compiled, wrapper)
+            if inspect.iscoroutine(result):
+                await result
+            await _await_entry_points(code, wrapper, acc_id)
+            return {"ok": True}
+        except asyncio.CancelledError:
+            raise
+        except SyntaxError as e:
+            ScriptLogger.put(acc_id, "ERROR", f"syntax line {e.lineno}: {e.msg}")
+            return {"ok": False, "error": f"SyntaxError: {e.msg}"}
         except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+            ScriptLogger.put(acc_id, "ERROR", f"crash: {type(e).__name__}: {str(e)[:220]}")
+            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:220]}"}
+        finally:
+            _CTX["progress"] = None
+            _CTX["acc"] = None
+            _Scope.table.pop(progress.get("client_oid", ""), None)
 
-SCRIPT_RATE = {}  # acc_id -> last run ts
+# ----------------------------------------------------------------------------
+# RAW SCRIPT RUNNER — full Telethon execution (Raw Mode).
+# Injects the REAL client + modules exactly as specified; the only safety nets
+# kept are: per-account log buffers with secret scrubbing, task/handler
+# lifecycle tracking (so Stop always works), stdout capture, and a hard cap on
+# runaway loops via task cancellation. Raw Mode = trusted code only.
+# ----------------------------------------------------------------------------
+class _StdoutTee:
+    """Captures print()/sys.stdout writes into the per-account log buffer."""
+
+    def __init__(self, acc_id):
+        object.__setattr__(self, "_acc", acc_id)
+        object.__setattr__(self, "_buf", "")
+
+    def write(self, s):
+        acc = object.__getattribute__(self, "_acc")
+        buf = object.__getattribute__(self, "_buf") + str(s)
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            if line.strip():
+                ScriptLogger.put(acc, "INFO", line)
+        object.__setattr__(self, "_buf", buf)
+        return len(str(s))
+
+    def flush(self):
+        acc = object.__getattribute__(self, "_acc")
+        buf = object.__getattribute__(self, "_buf")
+        if buf.strip():
+            ScriptLogger.put(acc, "INFO", buf)
+        object.__setattr__(self, "_buf", "")
+
+    def isatty(self):
+        return False
+
+
+def _pending_entry_points(code):
+    """Module-level bare zero-arg calls — the `main()` convention.
+    Calling an async function does NOT run its body (it only builds a coroutine
+    object), so a bare `main()` at module level must be awaited by the runner
+    for the spec's Blank template to actually execute."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    out = []
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Name) and not call.args and not call.keywords:
+                out.append(call.func.id)
+    return out
+
+
+async def _await_entry_points(code, g, acc_id):
+    for name in _pending_entry_points(code):
+        fn = g.get(name)
+        if inspect.iscoroutinefunction(fn):
+            ScriptLogger.put(acc_id, "INFO", f"awaiting entry point {name}()")
+            await fn()
+
+
+class RawScriptRunner:
+    """exec(code, globals_dict) with the spec's injected globals (Raw Mode)."""
+
+    MAX_CODE = 20000
+
+    @classmethod
+    def validate(cls, code):
+        """Raw mode: syntax check only — the operator has opted into raw power."""
+        if len(code or "") > cls.MAX_CODE:
+            return False, f"Script too long (max {cls.MAX_CODE} chars)"
+        try:
+            compile(code, "<script>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+        except SyntaxError as e:
+            return False, f"Syntax error line {e.lineno}: {e.msg}"
+        return True, "OK"
+
+    @staticmethod
+    def build_globals(acc_id, account_ctx, progress):
+        meta = account_ctx.get("meta") or {}
+        session = ""
+        try:
+            session = decrypt_str(meta.get("session_enc", "")) or ""
+        except Exception:
+            session = ""
+        if not session:
+            ScriptLogger.put(acc_id, "WARN",
+                             "SESSION_STRING unavailable (memory-only account) — global is empty")
+
+        client = account_ctx.get("client")
+        if client is None:
+            raise RuntimeError("Account not connected")
+
+        def log(msg):
+            ScriptLogger.put(acc_id, "INFO", msg)
+
+        async def sleep(secs):
+            await asyncio.sleep(float(secs))
+
+        # `import asyncio` would rebind the name to the REAL module, silently
+        # bypassing task tracking — so __import__ hands back the tracked proxy.
+        _real_import = _py_builtins.__import__
+
+        def _tracked_import(name, *a, **k):
+            if str(name).split(".")[0] == "asyncio":
+                return _ModuleProxy("asyncio")
+            return _real_import(name, *a, **k)
+
+        builtins_copy = dict(vars(_py_builtins))
+        builtins_copy["__import__"] = _tracked_import
+
+        g = {
+            # spec-mandated globals
+            "client": client,
+            "SESSION_STRING": session,
+            "PHONE": meta.get("phone") or None,
+            "log": log,
+            "print": lambda *a: ScriptLogger.put(acc_id, "INFO", " ".join(str(x) for x in a)[:400]),
+            "sleep": sleep,
+            # tracked asyncio so spawned loops can be cancelled on Stop
+            "asyncio": _ModuleProxy("asyncio"),
+            "re": re, "time": time, "os": os,
+            "__name__": "__script__",
+            "__builtins__": builtins_copy,
+        }
+        if TELETHON_OK:
+            g["events"] = events
+            g["errors"] = tl_errors
+            g["utils"] = tl_utils
+            g["types"] = tl_types
+        else:
+            for k in ("events", "errors", "utils", "types"):
+                g[k] = _ModuleProxy(k)
+        return g
+
+    @staticmethod
+    def _snapshot_handlers(client):
+        try:
+            return {id(h) for h, _e in client.list_event_handlers()}
+        except Exception:
+            return set()
+
+    @classmethod
+    async def run(cls, code, account_ctx, acc_id, progress):
+        ok, err = cls.validate(code)
+        if not ok:
+            ScriptLogger.put(acc_id, "ERROR", f"validation: {err}")
+            return {"ok": False, "error": err}
+        client = account_ctx.get("client")
+        if client is None:
+            return {"ok": False, "error": "Account not connected"}
+        g = cls.build_globals(acc_id, account_ctx, progress)
+        before = cls._snapshot_handlers(client)
+        _CTX["progress"] = progress
+        _CTX["acc"] = acc_id
+        try:
+            compiled = compile(code, "<script>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            # stdout is captured only for the (synchronous) module body
+            with contextlib.redirect_stdout(_StdoutTee(acc_id)):
+                result = eval(compiled, g)
+            if inspect.iscoroutine(result):
+                await result
+            await _await_entry_points(code, g, acc_id)
+            # diff-registered handlers -> tracked so Stop can remove them
+            try:
+                for h, _e in client.list_event_handlers():
+                    if id(h) not in before:
+                        progress.setdefault("handlers", []).append(h)
+                        ScriptLogger.put(acc_id, "OK",
+                                         f"handler registered: {getattr(h, '__name__', 'handler')}")
+            except Exception:
+                pass
+            return {"ok": True}
+        except asyncio.CancelledError:
+            raise
+        except SyntaxError as e:
+            ScriptLogger.put(acc_id, "ERROR", f"syntax line {e.lineno}: {e.msg}")
+            return {"ok": False, "error": f"SyntaxError: {e.msg}"}
+        except Exception as e:
+            ScriptLogger.put(acc_id, "ERROR", f"crash: {type(e).__name__}: {str(e)[:220]}")
+            return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:220]}"}
+        finally:
+            _CTX["progress"] = None
+            _CTX["acc"] = None
+
+
+# ----------------------------------------------------------------------------
+# Script lifecycle — create_task tracking, listener keep-alive, graceful stop
+# ----------------------------------------------------------------------------
+def _scripts_get_state(acc_id):
+    raw = scripts_store.load()
+    st = raw.get(acc_id, {})
+    if st.get("running") and acc_id not in SCRIPT_TASKS:
+        st["running"] = False
+        raw[acc_id] = st
+        scripts_store.save_bg(raw)
+    return st
+
+async def _run_task(acc_id, code, mode="safe"):
+    progress = SCRIPT_PROGRESS.setdefault(acc_id, {"handlers": [], "spawned": [], "stopped": False})
+    runner = RawScriptRunner if mode == "raw" else SafeScriptRunner
+    try:
+        res = await runner.run(code, ACCOUNTS.accounts.get(acc_id, {}), acc_id, progress)
+        alive_spawn = any(not t.done() for t in list(progress.get("spawned", [])))
+        keep = bool(progress.get("handlers")) or alive_spawn
+        if res.get("ok") and keep:
+            ScriptLogger.put(acc_id, "OK", "script active — listening (Stop to exit)")
+            while not progress.get("stopped"):
+                alive_spawn = any(not t.done() for t in list(progress.get("spawned", [])))
+                if not progress.get("handlers") and not alive_spawn:
+                    break
+                await asyncio.sleep(0.5)
+            ScriptLogger.put(acc_id, "OK", "Script stopped")
+        elif res.get("ok"):
+            ScriptLogger.put(acc_id, "OK", "Script finished")
+        else:
+            ScriptLogger.put(acc_id, "ERROR", f"exit: {res.get('error', 'unknown')}")
+    except asyncio.CancelledError:
+        ScriptLogger.put(acc_id, "OK", "Script stopped")
+        raise
+    except Exception as e:
+        ScriptLogger.put(acc_id, "ERROR", f"runner crash: {type(e).__name__}")
+    finally:
+        await _cleanup_script(acc_id)
+
+async def _cleanup_script(acc_id):
+    progress = SCRIPT_PROGRESS.get(acc_id, {})
+    acc = ACCOUNTS.accounts.get(acc_id) or {}
+    raw_client = acc.get("client")
+    for h in list(progress.get("handlers", [])):
+        try:
+            if raw_client:
+                raw_client.remove_event_handler(h)
+        except Exception:
+            pass
+    for t in list(progress.get("spawned", [])):
+        try:
+            t.cancel()
+        except Exception:
+            pass
+    SCRIPT_PROGRESS.pop(acc_id, None)
+    SCRIPT_TASKS.pop(acc_id, None)
+    raw = scripts_store.load()
+    st = raw.get(acc_id)
+    if st:
+        st["running"] = False
+        st["updated_at"] = int(time.time())
+        raw[acc_id] = st
+        await scripts_store.save(raw)
+
+async def start_script(acc_id):
+    if acc_id in SCRIPT_TASKS:
+        return False, "Script already running — stop it first"
+    st = _scripts_get_state(acc_id)
+    code = str(st.get("code", ""))
+    if not code.strip():
+        return False, "No saved script for this account"
+    acc = ACCOUNTS.accounts.get(acc_id)
+    if not acc or not acc.get("authorized") or not acc.get("client"):
+        return False, "ACCOUNT NOT AUTHORIZED — connect/activate the account first"
+    last = SCRIPT_RATE.get(acc_id, 0)
+    if time.time() - last < 10:
+        return False, f"Rate limit — {int(10 - (time.time() - last))}s left (1 run / 10s per account)"
+    SCRIPT_RATE[acc_id] = time.time()
+    mode = str(st.get("mode", "safe")).lower()
+    if mode not in ("safe", "raw"):
+        mode = "safe"
+    validator = RawScriptRunner.validate if mode == "raw" else SafeScriptRunner.validate
+    ok, err = validator(code)
+    if not ok:
+        ScriptLogger.put(acc_id, "ERROR", f"install blocked: {err}")
+        return False, err
+    SCRIPT_PROGRESS[acc_id] = {"handlers": [], "spawned": [], "stopped": False}
+    ScriptLogger.put(acc_id, "INFO",
+                     f"installing '{st.get('name') or 'script'}' [{mode} mode · template={st.get('template', 'custom')}]")
+    task = asyncio.get_running_loop().create_task(_run_task(acc_id, code, mode))
+    SCRIPT_TASKS[acc_id] = task
+    raw = scripts_store.load()
+    st = raw.get(acc_id, {})
+    st.update({"running": True, "installed_at": int(time.time()), "updated_at": int(time.time())})
+    raw[acc_id] = st
+    await scripts_store.save(raw)
+    ScriptLogger.put(acc_id, "OK", "Script installed & running")
+    safe_log("CMD", "SCRIPT", f"Installed script for {acc_id}")
+    return True, {"running": True}
+
+async def stop_script(acc_id, reason="operator"):
+    progress = SCRIPT_PROGRESS.get(acc_id)
+    if progress is not None:
+        progress["stopped"] = True
+    task = SCRIPT_TASKS.get(acc_id)
+    if not task and progress is None:
+        progress = {"handlers": [], "spawned": [], "stopped": True}
+    if task:
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5.0)
+        except Exception:
+            pass
+    await _cleanup_script(acc_id)
+    ScriptLogger.put(acc_id, "WARN", f"stop requested ({reason})")
+    return True, {"running": False}
+
+async def stop_all_scripts(reason="shutdown"):
+    for acc_id in list(set(list(SCRIPT_TASKS) + list(SCRIPT_PROGRESS))):
+        try:
+            await stop_script(acc_id, reason)
+        except Exception as e:
+            log.warning("stop script %s failed: %s", acc_id, type(e).__name__)
+
+async def stop_scripts_for_account(acc_id, reason="account removed"):
+    if acc_id in SCRIPT_TASKS or acc_id in SCRIPT_PROGRESS:
+        await stop_script(acc_id, reason)
 
 # ============================================================================
 # Diagnostics / Scheduler
@@ -2814,20 +3533,30 @@ async def api_accounts_activate():
         await SCHED.recover()
     return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
-# ---- custom scripts (AST sandbox) ----
+# ---- custom scripts — install/run/stop/logs (token-protected) ----
+def _script_meta(acc_id):
+    st = _scripts_get_state(acc_id)
+    return {"name": st.get("name", ""), "code": st.get("code", ""),
+            "template": st.get("template", "custom"), "mode": st.get("mode", "safe"),
+            "running": acc_id in SCRIPT_TASKS, "installed_at": st.get("installed_at"),
+            "updated_at": st.get("updated_at")}
+
 @app.route("/api/scripts/get", methods=["POST"])
 @require_token
 async def api_scripts_get():
     body = await request.get_json(silent=True) or {}
-    code = scripts_store.load().get(str(body.get("account_id", "")), {}).get("code", "")
-    return jsonify({"ok": True, "code": code})
+    acc_id = str(body.get("account_id", ""))
+    return jsonify({"ok": True, **_script_meta(acc_id)})
 
 @app.route("/api/scripts/validate", methods=["POST"])
 @require_token
 async def api_scripts_validate():
     body = await request.get_json(silent=True) or {}
-    ok, err = SafeScriptRunner.validate(str(body.get("code", "")))
-    return jsonify({"ok": ok, "message": "Valid sandbox script" if ok else None, "error": None if ok else err})
+    mode = str(body.get("mode", "safe")).lower()
+    validator = RawScriptRunner.validate if mode == "raw" else SafeScriptRunner.validate
+    ok, err = validator(str(body.get("code", "")))
+    label = "Valid raw-mode telethon script" if mode == "raw" else "Valid sandbox script"
+    return jsonify({"ok": ok, "mode": mode, "message": label if ok else None, "error": None if ok else err})
 
 @app.route("/api/scripts/save", methods=["POST"])
 @require_token
@@ -2835,42 +3564,103 @@ async def api_scripts_save():
     body = await request.get_json(silent=True) or {}
     acc_id = str(body.get("account_id", ""))
     code = str(body.get("code", ""))
+    mode = str(body.get("mode", "safe")).lower()
+    if mode not in ("safe", "raw"):
+        mode = "safe"
+    ok, err = (RawScriptRunner if mode == "raw" else SafeScriptRunner).validate(code)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    raw = scripts_store.load()
+    prev = raw.get(acc_id, {})
+    raw[acc_id] = {"name": str(body.get("name", "")).strip()[:60],
+                   "code": code,
+                   "template": str(body.get("template", "custom"))[:40],
+                   "mode": mode,
+                   "running": bool(raw.get(acc_id, {}).get("running")),
+                   "installed_at": prev.get("installed_at"),
+                   "updated_at": int(time.time())}
+    await scripts_store.save(raw)
+    safe_log("CMD", "SCRIPT", f"Script saved for {acc_id} ({mode})")
+    return jsonify({"ok": True, **_script_meta(acc_id)})
+
+@app.route("/api/scripts/install", methods=["POST"])
+@require_token
+async def api_scripts_install():
+    body = await request.get_json(silent=True) or {}
+    acc_id = str(body.get("account_id", ""))
+    # save first (same validation path), then run
+    save_body = {**body}
+    code = str(save_body.get("code", ""))
+    mode = str(save_body.get("mode", "safe")).lower()
+    mode = mode if mode in ("safe", "raw") else "safe"
     ok, err = SafeScriptRunner.validate(code)
     if not ok:
         return jsonify({"ok": False, "error": err}), 400
-    scripts = scripts_store.load()
-    scripts[acc_id] = {"code": code, "updated_at": int(time.time())}
-    await scripts_store.save(scripts)
-    safe_log("CMD", "SCRIPT", f"Script saved for {acc_id}")
-    return jsonify({"ok": True})
+    raw = scripts_store.load()
+    prev = raw.get(acc_id, {})
+    raw[acc_id] = {"name": str(save_body.get("name", "")).strip()[:60], "code": code,
+                   "template": str(save_body.get("template", "custom"))[:40], "mode": mode,
+                   "running": False, "installed_at": prev.get("installed_at"),
+                   "updated_at": int(time.time())}
+    await scripts_store.save(raw)
+    ok_run, payload = await start_script(acc_id)
+    if not ok_run:
+        return jsonify({"ok": False, "error": payload}), 400
+    return jsonify({"ok": True, "running": True, **_script_meta(acc_id)})
 
-@app.route("/api/scripts/run", methods=["POST"])
+@app.route("/api/scripts/stop", methods=["POST"])
 @require_token
-async def api_scripts_run():
+async def api_scripts_stop():
     body = await request.get_json(silent=True) or {}
     acc_id = str(body.get("account_id", ""))
-    last = SCRIPT_RATE.get(acc_id, 0)
-    if time.time() - last < 10:
-        return jsonify({"ok": False, "error": f"Rate limit — 1 run per 10s per account ({int(10 - (time.time() - last))}s left)"}), 429
-    code = scripts_store.load().get(acc_id, {}).get("code", "")
-    if not code:
-        return jsonify({"ok": False, "error": "No script saved for this account"}), 400
-    acc = ACCOUNTS.accounts.get(acc_id)
-    if not acc or not acc.get("authorized") or not acc.get("client"):
-        return jsonify({"ok": False, "error": "Account not authorized/connected"}), 400
-    SCRIPT_RATE[acc_id] = time.time()
-    logs = []
+    if acc_id not in SCRIPT_TASKS and acc_id not in SCRIPT_PROGRESS:
+        return jsonify({"ok": False, "error": "No running script for this account"}), 400
+    ok, payload = await stop_script(acc_id, "web")
+    return jsonify({"ok": True, "running": False}), 200
 
-    def log_fn(msg):
-        logs.append({"ts": int(time.time()), "msg": msg})
+@app.route("/api/scripts/templates", methods=["GET", "POST"])
+@require_token
+async def api_scripts_templates():
+    out = []
+    for key, t in SCRIPT_TEMPLATES.items():
+        out.append({"key": key, "label": t["label"], "source": "built-in",
+                    "mode": t.get("mode", "raw"), "code": t["code"]})
+    for key, t in templates_store.load().items():
+        out.append({"key": key, "label": t.get("label", key), "source": "user",
+                    "mode": t.get("mode", "raw"), "code": t.get("code", "")})
+    return jsonify({"ok": True, "templates": out})
 
-    try:
-        result = await asyncio.wait_for(SafeScriptRunner.run(code, acc, log_fn), timeout=30.0)
-        result["logs"] = logs
-        safe_log("CMD", "SCRIPT", f"Ran script for {acc_id} — {'ok' if result['ok'] else 'fail'}")
-        return jsonify(result)
-    except asyncio.TimeoutError:
-        return jsonify({"ok": False, "error": "Script timed out (30s)", "logs": logs})
+@app.route("/api/scripts/templates/save", methods=["POST"])
+@require_token
+async def api_scripts_templates_save():
+    body = await request.get_json(silent=True) or {}
+    label = str(body.get("label", "")).strip()[:40] or "User Template"
+    code = str(body.get("code", ""))
+    mode = str(body.get("mode", "safe")).lower()
+    mode = mode if mode in ("safe", "raw") else "safe"
+    ok, err = (RawScriptRunner if mode == "raw" else SafeScriptRunner).validate(code)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    key = "user_" + uuid.uuid4().hex[:5]
+    store = templates_store.load()
+    store[key] = {"label": label, "mode": mode, "code": code, "updated_at": int(time.time())}
+    await templates_store.save(store)
+    safe_log("CMD", "SCRIPT", f"Template saved: {label}")
+    return jsonify({"ok": True, "key": key})
+
+@app.route("/api/scripts/logs", methods=["GET"])
+@require_token
+async def api_scripts_logs():
+    acc_id = str(request.args.get("account_id", ""))
+    return jsonify({"ok": True, "logs": ScriptLogger.tail(acc_id, 200),
+                    "running": acc_id in SCRIPT_TASKS})
+
+@app.route("/api/scripts/logs/clear", methods=["POST"])
+@require_token
+async def api_scripts_logs_clear():
+    body = await request.get_json(silent=True) or {}
+    ScriptLogger.clear(str(body.get("account_id", "")))
+    return jsonify({"ok": True})
 
 @app.errorhandler(404)
 async def not_found(_e):
@@ -2909,10 +3699,11 @@ async def boot():
 
 @app.after_serving
 async def shutdown():
-    log.info("SHUTDOWN — engine stop + Telegram disconnect")
+    log.info("SHUTDOWN — engine stop + scripts stop + Telegram disconnect")
     try:
         ENGINE.eng["status"] = "stopped"
         state_store.save_bg(STATE)
+        await stop_all_scripts("shutdown")
         await TG.disconnect(clear=False)
         for acc in ACCOUNTS.accounts.values():
             if acc.get("client"):

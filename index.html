@@ -262,6 +262,29 @@ select.sel:focus{border-color:rgba(34,211,238,.5)}
 .cfgstatus{font-family:var(--mono);font-size:8.5px;color:#475569;letter-spacing:.12em;margin-top:9px}
 .acct-mini{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:99px;border:1px solid rgba(34,211,238,.4);background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(244,63,94,.2));font-family:var(--disp);font-weight:900;font-size:11px;color:#a5f3fc;flex:none}
 
+/* ---------- script editor v2 (line numbers + terminal) ---------- */
+.ln-wrap{display:flex;align-items:stretch;border:1px solid rgba(34,211,238,.12);border-radius:3px;background:rgba(0,0,0,.55);overflow:hidden}
+.ln-nums{flex:none;width:44px;padding:10px 8px 10px 0;margin:0;text-align:right;font-family:var(--mono);font-size:11px;line-height:1.62;color:#475569;background:rgba(0,0,0,.35);border-right:1px solid rgba(34,211,238,.08);user-select:none;overflow:hidden;white-space:pre}
+textarea.code.lined{flex:1;min-height:230px;border:0;outline:none;background:transparent;color:#a5f3fc;font-family:var(--mono);font-size:11px;line-height:1.62;padding:10px;resize:vertical;white-space:pre;overflow:auto}
+textarea.code.lined:focus{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
+.mode-seg{display:flex;gap:4px}
+.seg{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);color:var(--dim);padding:5px 12px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;transition:all .2s}
+.seg.on-safe{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.1);color:#6ee7b7}
+.seg.on-raw{border-color:rgba(244,63,94,.55);background:rgba(244,63,94,.12);color:#fda4af}
+.gchip{border:1px solid rgba(34,211,238,.18);background:rgba(34,211,238,.05);color:rgba(103,232,249,.75);border-radius:3px;padding:3px 8px;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em}
+.run-badge{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.2em;border:1px solid rgba(251,191,36,.5);background:rgba(251,191,36,.12);color:#fcd34d;border-radius:3px;padding:2px 8px;animation:ping2 1.4s ease-in-out infinite}
+@keyframes ping2{50%{box-shadow:0 0 14px -2px rgba(251,191,36,.7)}}
+.sc-term-out{max-height:190px;overflow-y:auto;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.45);border-radius:3px;padding:9px 10px;font-family:var(--mono);font-size:9.5px;line-height:1.6}
+.lrow{display:flex;gap:8px;align-items:flex-start;padding:1px 0;white-space:pre-wrap;word-break:break-word}
+.lts{color:#3f5468;flex:none}
+.llv{flex:none;width:34px;font-weight:700;letter-spacing:.05em}
+.ld-INFO{color:#67e8f9}.ld-WARN{color:#fcd34d}.ld-ERROR{color:#fda4af}.ld-OK{color:#6ee7b7}
+.lmsg{color:#94a3b8;flex:1;min-width:0}
+.term-toolbar{display:flex;gap:5px;align-items:center}
+.sc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+@media(max-width:560px){.sc-grid2{grid-template-columns:1fr}}
+.warn-line{margin-bottom:9px}
+
 /* ---------- lock veil / offline / toasts ---------- */
 .veil{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(2,6,16,.82);backdrop-filter:blur(3px);border-radius:4px;text-align:center;padding:16px}
 .veil svg{color:rgba(251,191,36,.8)}
@@ -558,27 +581,68 @@ select.sel:focus{border-color:rgba(34,211,238,.5)}
         <div class="veil hidden" id="tools-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Fail-closed — authorization required</p></div>
       </section>
 
-      <!-- CUSTOM SCRIPT -->
+      <!-- CUSTOM SCRIPT (v2 — installer with safe/raw modes) -->
       <section class="panel" style="position:relative"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
-        <div class="p-head"><h2 id="ic-script">Custom Script</h2><span class="meta">AST sandbox · 30s cap</span></div>
-        <div class="p-body" style="display:flex;flex-direction:column;gap:10px">
-          <label class="field" style="margin:0"><span><span class="lb">Account</span><span class="hint">per-account script</span></span>
-            <select class="sel" id="sc-account"><option value="">— no account saved —</option></select></label>
-          <textarea class="code" id="sc-code" spellcheck="false" placeholder="# whitelisted functions only
-folders = list_folders()
-log('Found folders: ' + str(len(folders)))"></textarea>
-          <div class="btnrow">
-            <button class="btn sm ghost" id="btn-sc-validate">Validate</button>
-            <button class="btn sm ghost" id="btn-sc-save">Save</button>
-            <button class="btn sm" id="btn-sc-run">Run</button>
+        <div class="p-head">
+          <h2 id="ic-script">Custom Script Installer</h2>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="run-badge hidden" id="sc-running">RUNNING</span>
+            <div class="mode-seg">
+              <button class="seg on-safe" id="btn-mode-safe">SAFE MODE</button>
+              <button class="seg" id="btn-mode-raw">RAW MODE</button>
+            </div>
           </div>
-          <div id="sc-err" class="err-box hidden"></div>
-          <div class="sc-out" id="sc-out"><p class="note">Output logs yahan dikhenge — real results only.</p></div>
-          <p class="note">Allowed: <b style="color:#67e8f9">send_message(chat_id, text)</b> · <b style="color:#67e8f9">list_folders()</b> ·
-            <b style="color:#67e8f9">scan_dead_channels(folder_name)</b> · <b style="color:#67e8f9">log(msg)</b> · <b style="color:#67e8f9">sleep(secs)</b>.
-            imports/exec/eval/dunder blocked · 30s timeout · 1 run / 10s per account.</p>
         </div>
-        <div class="veil hidden" id="sc-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to use sandbox</p></div>
+        <div class="p-body" style="display:flex;flex-direction:column;gap:10px">
+          <div id="sc-rawwarn" class="warn-box warn-line hidden">
+            ⚠️ Raw code execution. Only use trusted code. Server crash risk if buggy.
+            Code ko install karne se pehle review karo — ye aapke REPONSIBILITY hai.
+          </div>
+          <div class="sc-grid2">
+            <label class="field" style="margin:0"><span><span class="lb">Account</span><span class="hint">managed accounts</span></span>
+              <select class="sel" id="sc-account"><option value="">— select account —</option></select></label>
+            <label class="field" style="margin:0"><span><span class="lb">Script name</span></span>
+              <input id="sc-name" placeholder="Cleaner Bot" autocomplete="off"/></label>
+          </div>
+          <div class="sc-grid2">
+            <label class="field" style="margin:0"><span><span class="lb">Template</span></span>
+              <select class="sel" id="sc-tpl"></select></label>
+            <label class="field" style="margin:0"><span><span class="lb">&nbsp;</span><span class="hint">script.py — telethon context</span></span>
+              <button class="btn sm ghost" id="btn-sc-loadtpl">Load Template</button></label>
+          </div>
+
+          <div class="ln-wrap">
+            <pre class="ln-nums" id="sc-nums">1</pre>
+            <textarea class="code lined" id="sc-code" spellcheck="false" placeholder="# Injected globals: client, SESSION_STRING, PHONE, events, errors, utils, types
+# asyncio, re, time, log(msg), print(...), sleep(secs)
+async def main():
+    me = await client.get_me()
+    log(f'Booted as @{me.username}')
+main()"></textarea>
+          </div>
+
+          <div>
+            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:6px">ALLOWED GLOBALS</p>
+            <div style="display:flex;flex-wrap:wrap;gap:5px" id="sc-globals"></div>
+          </div>
+
+          <div class="btnrow">
+            <button class="btn" id="btn-sc-install" style="box-shadow:0 0 22px -6px rgba(34,211,238,.7)">Install &amp; Run</button>
+            <button class="btn ghost" id="btn-sc-save">Save Template</button>
+            <button class="btn danger" id="btn-sc-stop" disabled>Stop Script</button>
+          </div>
+
+          <div class="term-toolbar">
+            <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">SCRIPT TERMINAL</span>
+            <span style="margin-left:auto"></span>
+            <button class="mini" id="btn-sc-pause">Pause</button>
+            <button class="mini red" id="btn-sc-clear">Clear</button>
+          </div>
+          <div class="sc-term-out" id="sc-out"><p class="note">Script output ▶ live logs with levels (INFO/WARN/ERROR/OK) yahan dikhenge.</p></div>
+
+          <div id="sc-err" class="err-box hidden"></div>
+        </div>
+        <div class="veil hidden" id="sc-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to use installer</p></div>
       </section>
     </div>
 
@@ -968,7 +1032,7 @@ function setAuth(on) {
   $('access-on').classList.toggle('hidden', !on);
   $('access-meta').textContent = on ? 'ENABLED' : 'LOCKED';
   if (S.status) renderStatus(S.status);
-  if (on) { pollAudit(); runDiag(); loadAccounts(); loadSourceConfig(); loadScript($('sc-account').value); }
+  if (on) { pollAudit(); runDiag(); loadAccounts(); loadSourceConfig(); scLoadTemplates(); loadScript($('sc-account').value); }
 }
 
 $('btn-unlock').onclick = async () => {
@@ -1313,7 +1377,7 @@ async function loadAccounts() {
     const cur = sel.value;
     sel.innerHTML = list.length
       ? list.map(a => '<option value="' + esc(a.id) + '">' + esc(a.label) + ' (@' + esc(a.username || '?') + ')</option>').join('')
-      : '<option value="">— no account saved —</option>';
+      : '<option value="">— select account —</option>';
     if (cur) sel.value = cur;
   } catch (e) { if (e.status === 401) setAuth(false); }
 }
@@ -1396,62 +1460,170 @@ $('btn-cf-save').onclick = async () => {
   finally { b.disabled = false; b.textContent = 'Save Configuration'; }
 };
 
-/* ---------------- script sandbox UI ---------------- */
-function scShow(lines, cls) {
-  const out = $('sc-out');
-  out.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  (lines && lines.length ? lines : [['em', 'No output']]).forEach(([k, m]) => {
-    const p = document.createElement('p'); p.className = k; p.textContent = m;
-    frag.appendChild(p);
+/* ---------------- Custom Script Installer (Safe / Raw modes) ---------------- */
+const SC = {mode:'safe', running:false, paused:false, poll:null, templates:[], cur:'blank'};
+
+const GCHIPS = ['client','SESSION_STRING','PHONE','events','errors','utils','types','asyncio','log','print','sleep','os','re','time'];
+$('sc-globals').innerHTML = GCHIPS.map(c=>'<span class="gchip">'+esc(c)+'</span>').join('');
+
+function scButtons(){
+  $('btn-sc-stop').disabled = !SC.running || !S.auth;
+  $('btn-sc-install').disabled = !S.auth || SC.running;
+  $('sc-running').classList.toggle('hidden', !SC.running);
+  $('btn-sc-clear').disabled = !S.auth;
+  $('btn-sc-pause').disabled = !S.auth || !SC.running;
+}
+function fmtTs(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString('en-GB',{hour12:false}); }
+function scTerm(lines, replace){
+  const out=$('sc-out');
+  if(replace) out.innerHTML='';
+  const frag=document.createDocumentFragment();
+  (lines||[]).forEach(l=>{
+    const d=document.createElement('div'); d.className='lrow';
+    d.innerHTML='<span class="lts">'+fmtTs(l.ts)+'</span><span class="llv ld-'+esc(l.level)+'">'+esc(l.level)+'</span><span class="lmsg">'+esc(l.msg)+'</span>';
+    frag.appendChild(d);
   });
   out.appendChild(frag);
+  out.querySelector('.note')?.remove();
+  if(!SC.paused) out.scrollTop = out.scrollHeight;
 }
-
-async function loadScript(accId) {
-  if (!S.auth || !accId) return;
-  try {
-    const r = await api('/api/scripts/get', {method: 'POST', auth: true, body: {account_id: accId}});
-    $('sc-code').value = r.code || '';
-  } catch (e) { /* keep editor content on error */ }
+async function scFetchLogs(accId){
+  if(!accId||!S.auth) return;
+  try{
+    const r=await api('/api/scripts/logs?account_id='+encodeURIComponent(accId),{auth:true});
+    scTerm(r.logs||[], true);
+    const wasRunning = SC.running;
+    SC.running = !!r.running; scButtons();
+    if(wasRunning && !SC.running) scStopPoll();
+  }catch(e){}
 }
-$('sc-account').onchange = () => loadScript($('sc-account').value);
+function scStartPoll(accId){
+  scStopPoll();
+  SC.poll=setInterval(()=>{ if(!document.hidden) scFetchLogs(accId); }, 2000);
+}
+function scStopPoll(){ if(SC.poll){ clearInterval(SC.poll); SC.poll=null; } }
 
-$('btn-sc-validate').onclick = async () => {
-  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
-  try {
-    const r = await api('/api/scripts/validate', {method: 'POST', auth: true, body: {code: $('sc-code').value}});
-    if (r.ok) { scShow([['ok', 'VALID ▸ sandbox checks passed']]); toast('ok', 'Script valid'); }
-    else { scShow([['em', 'INVALID ▸ ' + (r.error || 'unknown')]]); }
-  } catch (e) { scShow([['em', 'ERROR ▸ ' + e.message]]); }
+function editorLines(){
+  const v=$('sc-code').value;
+  const n=v.split('\n').length;
+  const nums=$('sc-nums');
+  nums.textContent=Array.from({length:n},(_,i)=>i+1).join('\n');
+  nums.scrollTop = 0;
+}
+$('sc-code').addEventListener('input', editorLines);
+$('sc-code').addEventListener('scroll', ()=>{ $('sc-nums').style.transform='translateY(-'+$('sc-code').scrollTop+'px)'; });
+
+async function scLoadTemplates(){
+  try{
+    const r=await api('/api/scripts/templates',{auth:true});
+    SC.templates=r.templates||[];
+    const sel=$('sc-tpl');
+    sel.innerHTML='';
+    const groups={};
+    SC.templates.forEach(t=>{ (groups[t.source]=(groups[t.source]||[])).push(t); });
+    [['built-in','Templates'],['user','My templates']].forEach(([src,name])=>{
+      const g=document.createElement('optgroup'); g.label=name;
+      (groups[src]||[]).forEach(t=>{ const o=document.createElement('option'); o.value=t.key; o.textContent=t.label; g.appendChild(o); });
+      if(g.children.length) sel.appendChild(g);
+    });
+    if(!SC.templates.length) sel.innerHTML='<option value="custom">Custom</option>';
+  }catch(e){}
+}
+function scApplyTemplate(key){
+  const t=SC.templates.find(x=>x.key===key);
+  if(!t) return;
+  const cur=$('sc-code').value;
+  if(cur.trim() && cur!==t.code && !confirm('Replace current code with template?')) { $('sc-tpl').value=SC.cur; return; }
+  $('sc-code').value=t.code; editorLines(); SC.cur=key;
+  // built-in telethon templates run in raw mode — switch + show warning
+  if(t.mode && t.mode!==SC.mode){ setMode(t.mode); toast('info','Mode switched to '+t.mode.toUpperCase()+' for this template'); }
+}
+$('sc-tpl').onchange=()=>scApplyTemplate($('sc-tpl').value);
+$('btn-sc-loadtpl').onclick=()=>scApplyTemplate($('sc-tpl').value);
+
+function setMode(m){
+  SC.mode=m;
+  $('btn-mode-safe').classList.toggle('on-safe', m==='safe');
+  $('btn-mode-safe').classList.toggle('on-raw', false);
+  $('btn-mode-raw').classList.toggle('on-raw', m==='raw');
+  $('sc-rawwarn').classList.toggle('hidden', m!=='raw');
+}
+$('btn-mode-safe').onclick=()=>setMode('safe');
+$('btn-mode-raw').onclick=()=>{ setMode('raw'); toast('err','Raw mode: trusted code only'); };
+
+async function loadScript(accId){
+  SC.cur='';
+  if(!S.auth||!accId){ scButtons(); return; }
+  try{
+    const r=await api('/api/scripts/get',{method:'POST',auth:true,body:{account_id:accId}});
+    $('sc-name').value=r.name||'';
+    $('sc-code').value=r.code||'';
+    setMode(r.mode||'safe');
+    editorLines();
+    SC.running=!!r.running; scButtons();
+    if(Array.isArray($('sc-tpl').options) && r.template) { try{$('sc-tpl').value=r.template;}catch(e){} }
+    scFetchLogs(accId);
+    if(SC.running) scStartPoll(accId); else scStopPoll();
+  }catch(e){}
+}
+$('sc-account').onchange=()=>loadScript($('sc-account').value);
+
+$('btn-sc-install').onclick=()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  const accId=$('sc-account').value;
+  if(!accId) return toast('err','Pehle ek managed account select karo');
+  const btn=$('btn-sc-install');
+  if(btn.dataset.armed!=='1'){
+    btn.dataset.armed='1';
+    const old=btn.textContent; btn.textContent='Sure?';
+    setTimeout(()=>{ if(btn.dataset.armed==='1'){ delete btn.dataset.armed; btn.textContent='Install & Run'; } },3000);
+    return;
+  }
+  delete btn.dataset.armed; btn.disabled=true; btn.textContent='Installing…';
+  const body={account_id:accId,name:$('sc-name').value.trim(),code:$('sc-code').value,template:$('sc-tpl').value||'custom',mode:SC.mode};
+  api('/api/scripts/install',{method:'POST',auth:true,body}).then(r=>{
+    scErr(null);
+    SC.running=true; scButtons(); scFetchLogs(accId); scStartPoll(accId);
+    toast('ok','Script installed & running');
+  }).catch(e=>{ scErr(e.message); })
+   .finally(()=>{ btn.disabled=SC.running; btn.textContent='Install & Run'; });
+};
+function scErr(msg){ const el=$('sc-err'); if(!msg){el.classList.add('hidden');return;} el.textContent=msg; el.classList.remove('hidden'); }
+
+$('btn-sc-save').onclick=async()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  const label=$('sc-name').value.trim()||'User Script';
+  try{
+    await api('/api/scripts/templates/save',{method:'POST',auth:true,body:{label,code:$('sc-code').value}});
+    toast('ok','Template saved');
+    scLoadTemplates();
+  }catch(e){ scErr(e.message); }
 };
 
-$('btn-sc-save').onclick = async () => {
-  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
-  const accId = $('sc-account').value;
-  if (!accId) return toast('err', 'Pehle ek managed account add/select karo');
-  try {
-    await api('/api/scripts/save', {method: 'POST', auth: true, body: {account_id: accId, code: $('sc-code').value}});
-    scShow([['ok', 'SAVED ▸ scripts.json (validated before save)']]);
-    toast('ok', 'Script saved');
-  } catch (e) { scShow([['em', 'SAVE FAILED ▸ ' + e.message]]); }
+$('btn-sc-stop').onclick=async()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  const accId=$('sc-account').value;
+  const b=$('btn-sc-stop'); b.disabled=true; b.textContent='Stopping…';
+  try{
+    await api('/api/scripts/stop',{method:'POST',auth:true,body:{account_id:accId}});
+    SC.running=false; scButtons(); scStopPoll(); scFetchLogs(accId);
+    toast('ok','Script stopped');
+  }catch(e){ scErr(e.message); b.disabled=!SC.running; }
+  finally{ b.textContent='Stop Script'; }
 };
 
-$('btn-sc-run').onclick = async () => {
-  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
-  const accId = $('sc-account').value;
-  if (!accId) return toast('err', 'Pehle ek managed account add/select karo');
-  const b = $('btn-sc-run'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Running…';
-  scShow([['lg', 'executing in sandbox (max 30s)…']]);
-  try {
-    const r = await api('/api/scripts/run', {method: 'POST', auth: true, body: {account_id: accId}});
-    const lines = [];
-    lines.push([r.ok ? 'ok' : 'em', (r.ok ? 'OK ▸ ' : 'FAILED ▸ ') + (r.message || r.error || 'done')]);
-    (r.logs || []).forEach(l => lines.push(['lg', l.msg]));
-    scShow(lines);
-  } catch (e) { scShow([['em', 'ERROR ▸ ' + e.message]]); }
-  finally { b.disabled = false; b.textContent = 'Run'; }
+$('btn-sc-clear').onclick=async()=>{
+  $('sc-out').innerHTML='';
+  const accId=$('sc-account').value;
+  if(S.auth&&accId){ try{ await api('/api/scripts/logs/clear',{method:'POST',auth:true,body:{account_id:accId}});}catch(e){} }
+  scTerm([{ts:Date.now()/1000,level:'INFO',msg:'Terminal cleared'}], true);
 };
+$('btn-sc-pause').onclick=()=>{
+  SC.paused=!SC.paused;
+  $('btn-sc-pause').textContent=SC.paused?'Resume':'Pause';
+};
+
+scButtons();
 
 /* greeting + first sync */
 term('sys', 'DEVIL JARVIS CORE v3.1 — Telegram AI Control System');
