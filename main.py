@@ -86,6 +86,15 @@ ERR_TASK_NOT_FOUND = "TASK_NOT_FOUND"
 ERR_NOT_AUTHORIZED = "NOT_AUTHORIZED"
 ERR_AMBIGUOUS = "AMBIGUOUS"
 ERR_NOT_SUPPORTED = "NOT_SUPPORTED"
+ERR_FOLDER_NOT_FOUND = "FOLDER_NOT_FOUND"
+ERR_FOLDER_EMPTY = "FOLDER_EMPTY"
+ERR_FOLDER_RESOLUTION_FAILED = "FOLDER_RESOLUTION_FAILED"
+ERR_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+ERR_VERIFICATION_FAILED = "VERIFICATION_FAILED"
+ERR_PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+ERR_AI_PARSE_FAILED = "AI_PARSE_FAILED"
+ERR_NO_VALID_TARGETS = "NO_VALID_TARGETS"
+ERR_NO_ACTIVE_MONITOR = "NO_ACTIVE_MONITOR"
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-5s | %(name)s | %(message)s")
@@ -845,6 +854,8 @@ class ReplyContext:
     entity: ResolvedEntity
     message_id: Optional[int]      # original channel_post id when forwarded
     via: str = "reply"
+    text: str = ""
+    has_media: bool = False
 
 
 class EntityResolver:
@@ -1004,6 +1015,8 @@ class EntityResolver:
     async def from_reply(self, account_id: str, reply_msg: Any) -> Optional[ReplyContext]:
         if reply_msg is None:
             return None
+        text = short(getattr(reply_msg, "raw_text", "") or "", 180)
+        has_media = bool(getattr(reply_msg, "media", None))
         fwd = getattr(reply_msg, "fwd_from", None)
         if fwd is not None:
             pid = getattr(fwd, "from_id", None)
@@ -1012,18 +1025,21 @@ class EntityResolver:
                 try:
                     client = await self._client(account_id)
                     ent = await client.get_entity(pid)
-                    return ReplyContext(self._wrap(ent, account_id), msg_id)
+                    return ReplyContext(self._wrap(ent, account_id), msg_id,
+                                        text=text, has_media=has_media)
                 except Exception:
                     return ReplyContext(ResolvedEntity(
                         utils.get_peer_id(pid), "channel",
-                        getattr(fwd, "from_name", "") or "source", ""), msg_id)
+                        getattr(fwd, "from_name", "") or "source", ""), msg_id,
+                        text=text, has_media=has_media)
         try:
             me_id = (self.accounts.runtime.get(account_id) or AccountRuntime(account_id)).self_id
             peer = getattr(reply_msg, "peer_id", None)
             if peer is not None and getattr(peer, "user_id", None) not in (None, me_id):
                 client = await self._client(account_id)
                 return ReplyContext(self._wrap(await client.get_entity(peer), account_id),
-                                    getattr(reply_msg, "id", None))
+                                    getattr(reply_msg, "id", None),
+                                    text=text, has_media=has_media)
         except Exception:
             pass
         return None
@@ -1079,6 +1095,163 @@ class ConfirmationEngine:
             return None
         return {"desc": p["desc"], "expires_in": max(0, int(p["expires_at"] - utc_now())),
                 "task_id": p.get("task_id")}
+
+
+# ----------------------------------------------------------------------------
+# 8b. AI PROVIDER ENGINE - multi-provider, ordered fallback, env-only secrets
+# ----------------------------------------------------------------------------
+
+AI_MODES = ("READ", "PLAN", "EXECUTE", "STOP", "CONFIGURE", "ASK")
+
+
+@dataclass
+class AIProvider:
+    name: str
+    kind: str                # openai_compat / gemini / anthropic
+    base_url: str
+    key: str
+    model: str
+    configured: bool
+    last_success: str = ""
+    last_error: str = ""
+    last_used: str = ""
+
+    def public(self, active: bool) -> dict:
+        return {"name": self.name, "model": self.model or None,
+                "configured": self.configured, "active": active,
+                "last_success": self.last_success or None,
+                "last_error": self.last_error or None,
+                "last_used": self.last_used or None}
+
+
+class AIEngine:
+    """Real AI understanding layer. Providers configured ONLY via env.
+
+    GROQ_API_KEY/GROQ_MODEL, GEMINI_API_KEY/GEMINI_MODEL, HF_TOKEN/HF_MODEL,
+    OPENAI_API_KEY/OPENAI_MODEL/OPENAI_BASE_URL, OPENROUTER_API_KEY/OPENROUTER_MODEL,
+    ANTHROPIC_API_KEY/ANTHROPIC_MODEL, AI_PROVIDER_ORDER.
+    A provider is usable only when BOTH key and model are set (Gemini never assumes a model).
+    """
+
+    DEFS = {
+        "groq":        ("openai_compat", "https://api.groq.com/openai/v1", "GROQ_API_KEY", "GROQ_MODEL"),
+        "gemini":      ("gemini", "", "GEMINI_API_KEY", "GEMINI_MODEL"),
+        "huggingface": ("openai_compat", "https://router.huggingface.co/v1", "HF_TOKEN", "HF_MODEL"),
+        "openai":      ("openai_compat", OPENAI_BASE_URL, "OPENAI_API_KEY", "OPENAI_MODEL"),
+        "openrouter":  ("openai_compat", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODEL"),
+        "anthropic":   ("anthropic", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+    }
+
+    def __init__(self, diag: "Diagnostics"):
+        self.diag = diag
+        order = os.environ.get("AI_PROVIDER_ORDER") or \
+            "groq,gemini,huggingface,openai,openrouter,anthropic"
+        self.providers: list[AIProvider] = []
+        seen = set()
+        for raw in order.split(","):
+            name = raw.strip().lower()
+            if not name or name in seen or name not in self.DEFS:
+                continue
+            seen.add(name)
+            kind, base, key_env, model_env = self.DEFS[name]
+            key = os.environ.get(key_env, "").strip()
+            model = os.environ.get(model_env, "").strip()
+            p = AIProvider(name, kind, base, key, model, configured=bool(key and model))
+            if key and not model:
+                p.last_error = f"{model_env} not set - provider skipped (no model assumed)"
+            self.providers.append(p)
+        self.active: Optional[str] = None
+
+    def any_configured(self) -> bool:
+        return any(p.configured for p in self.providers)
+
+    def status_public(self) -> dict:
+        return {"any_configured": self.any_configured(),
+                "active": self.active,
+                "providers": [p.public(self.active == p.name) for p in self.providers],
+                "order": [p.name for p in self.providers]}
+
+    @staticmethod
+    def _extract_json(text: str) -> Optional[dict]:
+        if not text:
+            return None
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def _chat_openai_compat(self, p: AIProvider, system: str, user: str) -> Optional[str]:
+        headers = {"Authorization": f"Bearer {p.key}"}
+        if p.name == "openrouter":
+            headers["HTTP-Referer"] = "http://localhost"
+        async with httpx.AsyncClient(timeout=30) as h:
+            r = await h.post(f"{p.base_url}/chat/completions", headers=headers,
+                             json={"model": p.model, "temperature": 0,
+                                   "messages": [{"role": "system", "content": system},
+                                                {"role": "user", "content": user}]})
+        if r.status_code != 200:
+            raise RuntimeError(f"http {r.status_code}")
+        return r.json()["choices"][0]["message"]["content"]
+
+    async def _chat_gemini(self, p: AIProvider, system: str, user: str) -> Optional[str]:
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{p.model}:generateContent")
+        async with httpx.AsyncClient(timeout=30) as h:
+            r = await h.post(url, headers={"x-goog-api-key": p.key},
+                             json={"systemInstruction": {"parts": [{"text": system}]},
+                                   "contents": [{"role": "user", "parts": [{"text": user}]}],
+                                   "generationConfig": {"temperature": 0,
+                                                        "responseMimeType": "application/json"}})
+        if r.status_code != 200:
+            raise RuntimeError(f"http {r.status_code}")
+        data = r.json()
+        parts = data["candidates"][0]["content"]["parts"]
+        return "".join(part.get("text", "") for part in parts)
+
+    async def _chat_anthropic(self, p: AIProvider, system: str, user: str) -> Optional[str]:
+        async with httpx.AsyncClient(timeout=30) as h:
+            r = await h.post(f"{p.base_url}/messages",
+                             headers={"x-api-key": p.key, "anthropic-version": "2023-06-01"},
+                             json={"model": p.model, "max_tokens": 1400, "temperature": 0,
+                                   "system": system,
+                                   "messages": [{"role": "user", "content": user}]})
+        if r.status_code != 200:
+            raise RuntimeError(f"http {r.status_code}")
+        data = r.json()
+        return "".join(c.get("text", "") for c in data.get("content", []))
+
+    async def decide(self, system: str, user: str) -> tuple[Optional[dict], str]:
+        """Try providers in configured order; first valid JSON decision wins."""
+        for p in self.providers:
+            if not p.configured:
+                continue
+            try:
+                if p.kind == "openai_compat":
+                    raw = await self._chat_openai_compat(p, system, user)
+                elif p.kind == "gemini":
+                    raw = await self._chat_gemini(p, system, user)
+                else:
+                    raw = await self._chat_anthropic(p, system, user)
+                data = self._extract_json(raw or "")
+                if data is None:
+                    raise ValueError("malformed AI JSON")
+                p.last_success = iso()
+                p.last_used = iso()
+                p.last_error = ""
+                self.active = p.name
+                self.diag.info("AI_PROVIDER", "decision", f"{p.name} ok ({p.model})")
+                return data, p.name
+            except Exception as exc:
+                p.last_error = f"{type(exc).__name__}: {short(str(exc), 120)}"
+                self.diag.warn("AI_PROVIDER", "fallback",
+                               f"{p.name} failed -> {type(exc).__name__}; trying next provider",
+                               error_code=ERR_PROVIDER_UNAVAILABLE)
+                continue
+        return None, ""
 
 
 # ----------------------------------------------------------------------------
@@ -1958,8 +2131,15 @@ class ToolImpl:
             folder = await self.resolver.resolve_folder(account_id, name)
         if not folder:
             return ToolResult.failure(f"folder not found: '{short(name or str(folder_id), 40)}'",
-                                      ERR_ENTITY_NOT_FOUND)
+                                      ERR_FOLDER_NOT_FOUND)
         peers = await self.resolver.folder_peers(account_id, folder)
+        resolved_n = sum(len(peers[k]) for k in ("channels", "groups", "users"))
+        if len(folder.get("peers", [])) == 0:
+            return ToolResult.failure(f"folder '{folder['title']}' contains no chats",
+                                      ERR_FOLDER_EMPTY)
+        if resolved_n == 0 and folder.get("peers"):
+            return ToolResult.failure(f"folder '{folder['title']}' peers could not be resolved from this account",
+                                      ERR_FOLDER_RESOLUTION_FAILED)
         return ToolResult.success({"id": folder["id"], "title": folder["title"],
                                    "channels": peers["channels"], "groups": peers["groups"],
                                    "users": peers["users"], "unresolved": peers["unresolved"],
@@ -1972,6 +2152,9 @@ class ToolImpl:
         if not r.ok:
             return r
         chans = r.data["channels"]
+        if not chans:
+            return ToolResult.failure(f"folder '{r.data['title']}' has no channels",
+                                      ERR_FOLDER_EMPTY)
         return ToolResult.success({"folder": r.data["title"], "channels": chans,
                                    "count": len(chans)})
 
@@ -2204,27 +2387,40 @@ class ToolImpl:
     async def stop_monitor(self, account_id: str, monitor_id: str = "",
                            channel: Any = None) -> ToolResult:
         stopped = 0
+        ids: list[str] = []
         if monitor_id:
             m = self.monitors.store.data["monitors"].get(str(monitor_id))
             if not m:
                 return ToolResult.failure(f"monitor not found: {monitor_id}", ERR_TASK_NOT_FOUND)
             if self.monitors.stop(str(monitor_id)):
                 stopped += 1
+                ids.append(str(monitor_id))
         elif channel is not None:
             ent = await self._ent(account_id, channel)
             for m in self.monitors.active_all(account_id):
                 if int(m["channel_id"]) == int(ent.id):
                     self.monitors.stop(m["monitor_id"])
                     stopped += 1
+                    ids.append(m["monitor_id"])
         else:
-            stopped = self.monitors.stop_all(account_id)
+            for m in self.monitors.active_all(account_id):
+                if self.monitors.stop(m["monitor_id"]):
+                    stopped += 1
+                    ids.append(m["monitor_id"])
         for t in self.tasks.list(account_id):
             if t.kind == "monitor" and t.status in (TS_MONITORING, TS_RUNNING, TS_PAUSED):
                 mid = t.params.get("monitor_id", "")
                 m = self.monitors.store.data["monitors"].get(mid)
                 if not m or m.get("status") != "ACTIVE":
                     self.tasks.set_status(t, TS_STOPPED, "monitor stopped")
-        return ToolResult.success({"stopped": stopped})
+        if stopped == 0 and (monitor_id or channel is not None):
+            return ToolResult.failure("no active monitor matches that target - nothing was stopped",
+                                      ERR_NO_ACTIVE_MONITOR)
+        return ToolResult.success({"stopped": stopped, "ids": ids,
+                                   "verified": all(
+                                       self.monitors.store.data["monitors"].get(i, {}).get("status") == "STOPPED"
+                                       for i in ids)},
+                                  verification={"stopped_ids": ids})
 
     async def update_monitor(self, account_id: str, monitor_id: str, condition: str = "",
                              action: str = "", end_ts: Optional[float] = None) -> ToolResult:
@@ -2653,6 +2849,79 @@ class ToolImpl:
         }
         return ToolResult.success({"topic": topic, "required": reqs.get(topic, reqs["cross"])})
 
+    # ---------------- main channel helpers / latest message / saved ----------------
+    async def resolve_main_channel(self, account_id: str) -> ToolResult:
+        mains = self.accounts.get_main_channels(account_id)
+        if not mains:
+            return ToolResult.failure("no Main Channel configured", ERR_ENTITY_NOT_FOUND)
+        skipped = []
+        for ch in mains:
+            try:
+                ent = await self.resolver.resolve(account_id, str(ch["id"]))
+                return ToolResult.success(ent.brief_dict() | {"via": "configured main channel"})
+            except EntityResolutionError as exc:
+                skipped.append(f"{ch.get('title') or ch['id']}: {short(str(exc), 60)}")
+        return ToolResult.failure("configured Main Channel(s) unreachable: " + "; ".join(skipped[:3]),
+                                  ERR_ENTITY_NOT_FOUND)
+
+    async def get_latest_message(self, account_id: str, ref: Any = None,
+                                 use_main_channel: bool = False) -> ToolResult:
+        client = await self._client(account_id)
+        if use_main_channel or ref is None:
+            mc = await self.resolve_main_channel(account_id)
+            if not mc.ok:
+                return mc
+            ent = await self._ent(account_id, mc.data["id"])
+        else:
+            ent = await self._ent(account_id, ref)
+        latest = None
+        async for m in client.iter_messages(ent.entity, limit=1):
+            latest = m
+        if latest is None or getattr(latest, "id", None) is None:
+            return ToolResult.failure(f"no messages in {ent.title}", ERR_MESSAGE_NOT_FOUND)
+        media_type = getattr(getattr(latest, "media", None), "__class__", type(None)).__name__ \
+            if getattr(latest, "media", None) else None
+        return ToolResult.success({"entity": ent.brief(), "entity_id": ent.id,
+                                   "message_id": latest.id,
+                                   "date": iso(latest.date.timestamp()) if latest.date else None,
+                                   "date_ktm": ktm_iso(latest.date.timestamp()) if latest.date else None,
+                                   "text": short(getattr(latest, "raw_text", "") or "", 400),
+                                   "has_media": bool(getattr(latest, "media", None)),
+                                   "media_type": media_type,
+                                   "views": getattr(latest, "views", None)},
+                                  verification={"fetched": True, "read_only": True})
+
+    async def forward_to_saved(self, account_id: str, ref: Any, message_id: int) -> ToolResult:
+        client = await self._client(account_id)
+        src = await self._ent(account_id, ref)
+        m = await client.get_messages(src.entity, ids=int(message_id))
+        if m is None:
+            return ToolResult.failure(f"message #{message_id} not found in {src.title}",
+                                      ERR_MESSAGE_NOT_FOUND)
+        try:
+            res = await client.forward_messages("me", m.id, from_peer=src.entity)
+        except ChatForwardsRestrictedError:
+            res = await client.send_message("me", m.message or "", file=m.media)
+        if isinstance(res, list):
+            res = res[0] if res else None
+        if res is None:
+            return ToolResult.failure("forward returned nothing", ERR_TOOL_UNAVAILABLE, retryable=True)
+        got = await client.get_messages("me", ids=res.id)
+        if got is None:
+            return ToolResult.failure("destination verification failed in Saved Messages",
+                                      ERR_VERIFICATION_FAILED)
+        self.diag.ok("VERIFICATION", "forward_to_saved",
+                     f"{src.title}#{m.id} -> saved #{res.id}", account_id=account_id)
+        return ToolResult.success({"source": src.brief(), "source_message_id": m.id,
+                                   "destination": "saved_messages",
+                                   "saved_message_id": res.id},
+                                  verification={"verified": True})
+
+    async def heal_system(self, account_id: str) -> ToolResult:
+        if getattr(self, "core", None) is None:
+            return ToolResult.failure("healing backend not wired", ERR_TOOL_UNAVAILABLE)
+        return await self.core.run_healing(account_id)
+
 
 # ----------------------------------------------------------------------------
 # 15. TOOL REGISTRATION TABLE - register once, discoverable forever
@@ -2691,6 +2960,10 @@ def register_all_tools(reg: ToolRegistry, impl: ToolImpl) -> None:
     R.register(S("inspect_folder", "folders", "Resolve a folder by title; enumerate its channels/groups/users.", req=["name"], intents=["INSPECT_FOLDER", "FOLDER_CHANNELS"])); R.specs["inspect_folder"].handler = H.inspect_folder
     R.register(S("list_folder_channels", "folders", "Only the channels inside a folder.", req=["name"], intents=["FOLDER_CHANNELS"])); R.specs["list_folder_channels"].handler = H.list_folder_channels
     R.register(S("resolve_folder_by_name", "folders", "Find a dialog folder by exact/normalized/fuzzy title.", req=["name"], intents=["RESOLVE", "INSPECT_FOLDER"])); R.specs["resolve_folder_by_name"].handler = H.resolve_folder_by_name
+    R.register(S("resolve_main_channel", "dialogs", "Resolve the configured Main Channel to a real entity.", intents=["RESOLVE", "MAIN_CHANNEL_CONFIG", "LATEST_MESSAGE", "FORWARD_LATEST_SAVED"], test={})); R.specs["resolve_main_channel"].handler = H.resolve_main_channel
+    R.register(S("get_latest_message", "messages", "Fetch the actual latest message of a chat (read-only).", opt=["ref", "use_main_channel"], intents=["LATEST_MESSAGE", "RECENT_MESSAGES", "FORWARD_LATEST_SAVED"])); R.specs["get_latest_message"].handler = H.get_latest_message
+    R.register(S("forward_to_saved", "messages", "Forward an exact message into Saved Messages + verify destination.", req=["ref", "message_id"], read_only=False, intents=["FORWARD_LATEST_SAVED", "FORWARD"])); R.specs["forward_to_saved"].handler = H.forward_to_saved
+    R.register(S("heal_system", "diagnostics", "Controlled self-repair: JSON salvage, cache refresh, orphan reconcile, reconnect.", read_only=False, confirm=True, intents=["HEAL_SYSTEM", "SYSTEM_STATUS", "HEAL"])); R.specs["heal_system"].handler = H.heal_system
     # MESSAGES
     R.register(S("get_message", "messages", "Fetch one message by id.", req=["ref", "message_id"], intents=["GET_MESSAGE"])); R.specs["get_message"].handler = H.get_message
     R.register(S("get_recent_messages", "messages", "Recent messages of a chat.", req=["ref"], opt=["limit"], intents=["RECENT_MESSAGES", "LIST"])); R.specs["get_recent_messages"].handler = H.get_recent_messages
@@ -2760,7 +3033,7 @@ def register_all_tools(reg: ToolRegistry, impl: ToolImpl) -> None:
 
 KW = {
     "info": ["batao", "btaiye", "info", "information", "detail", "details", "tell me", "show me",
-             "ke baare me", "ke bare me", "jankari", "jaankari"],
+             "ke baare me", "ke bare me", "jankari", "jaankari", "show", "diktavo"],
     "list": ["list", "dikhao", "dikha", "de dikhao", "sabhi", "saare", "saari", "all",
              "enumer", "batao kon kon"],
     "watch": ["dhyan rakh", "dhyan", "nazar", "nigrani", "watch", "monitor", "sambhal",
@@ -2915,6 +3188,16 @@ class NLU:
                 bump("MAIN_CHANNEL_LIST", 6)
             if f["kw_watch"] or (f["kw_sleep_away"] and f["has_channel_word"]):
                 bump("MONITOR_START", 7)
+        # ---- reply identification / healing ----
+        if f["has_reply"] and ("identify" in n or "pehchano" in n or "kis channel" in n
+                               or "kaunsa channel" in n or "kaun si channel" in n or "replied" in n) \
+                and not ("source" in n or f["kw_target_words"] or f["cross_word"]):
+            bump("IDENTIFY_REPLY", 8)
+        if "heal" in n or ("repair" in n and "system" in n):
+            bump("HEAL_SYSTEM", 8)
+        if "diagnostic" in n:
+            bump("SYSTEM_DIAGNOSTICS", 6)
+
         # ---- monitoring ----
         if (f["kw_watch"] or (f["kw_sleep_away"] and (f["has_channel_word"] or f["kw_main_channel"]))) \
                 and not f["kw_stop"]:
@@ -2923,6 +3206,11 @@ class NLU:
             bump("MONITOR_STOP", 7)
         if f["kw_monitor_word"] and f["kw_list"] and not f["kw_watch"]:
             bump("TASK_LIST", 4)
+        # ---- source/target chaining without the literal word 'cross' ----
+        if "source" in n and f["kw_target_words"] and (f["has_reply"] or f["folder_name"]
+                                                       or f["kw_main_channel"]):
+            bump("CROSS_PLAN", 6)
+
         # ---- cross ----
         if f["cross_word"]:
             if f["kw_stop"]:
@@ -2946,7 +3234,14 @@ class NLU:
             bump("DELETE_MESSAGES", 6 + (1 if f["kw_latest"] else 0))
         if f["kw_search"] and (f["kw_messages_word"] or has_ref or f["ctx_ref"]):
             bump("SEARCH_MESSAGES", 6)
-        if f["kw_latest"] and f["kw_messages_word"] and not f["kw_delete"]:
+        if (f["kw_forward"] or ("saved" in n and has_kw(n, sk, ["bhej", "bhejo", "send karo"]))) \
+                and "saved" in n and not f["kw_delete"] and not f["kw_watch"]:
+            if f["kw_latest"] or f["kw_messages_word"] or f["has_reply"]:
+                bump("FORWARD_LATEST_SAVED", 9)
+        if f["kw_latest"] and (f["kw_messages_word"] or "post" in n) and not f["kw_delete"] \
+                and not f["kw_forward"]:
+            bump("LATEST_MESSAGE", 8)
+        elif f["kw_latest"] and f["kw_messages_word"] and not f["kw_delete"]:
             bump("RECENT_MESSAGES", 5)
         if (f["kw_forward"] or (f["kw_post"] and f["kw_main_channel"])) and f["kw_main_channel"]:
             bump("FORWARD_TO_MAIN", 6)
@@ -3068,6 +3363,36 @@ class Planner:
         core = self.core
         plan = new_plan(account_id, intent)
 
+        # ---------- identify replied message (READ, zero mutation) ----------
+        if intent == "IDENTIFY_REPLY":
+            plan["report_only"] = True
+            if reply_ctx is None:
+                plan["missing"].append("a replied message - reply to a message and ask again")
+                return plan
+            plan["summary"] = "Identify replied message origin (read-only)"
+            plan["entities"] = [
+                f"channel: {reply_ctx.entity.brief()}",
+                f"channel id: {reply_ctx.entity.id}",
+                "message id: " + (str(reply_ctx.message_id) if reply_ctx.message_id is not None
+                                  else "not exposed (replied item was not a channel forward)"),
+                f'text: "{reply_ctx.text or "[no text]"}"'
+                + (" | media: yes" if reply_ctx.has_media else " | media: no"),
+            ]
+            return plan
+
+        # ---------- healing / diagnostics ----------
+        if intent == "HEAL_SYSTEM":
+            plan["steps"].append(plan_step("heal_system", "diagnostics + safe repairs"))
+            plan["summary"] = "Run system diagnostics and apply safe healing"
+            plan["risk"] = "low"
+            return plan
+        if intent == "SYSTEM_DIAGNOSTICS":
+            for probe in ("system_status", "telegram_status", "task_health",
+                          "monitor_health", "tool_health"):
+                plan["steps"].append(plan_step(probe, "probe"))
+            plan["summary"] = "Full system diagnostics (read-only)"
+            return plan
+
         # ---------- informational: cross requirements (NO EXECUTION) ----------
         if intent == "CROSS_REQUIREMENTS_EXPLAIN":
             plan["report_only"] = True
@@ -3136,6 +3461,15 @@ class Planner:
             return plan
 
         if intent in ("LIST_DIALOGS", "LIST_CHANNELS", "HELP"):
+            if intent == "LIST_CHANNELS":
+                fname = await self._folder_from_text(account_id, f)
+                if fname:
+                    plan["intent"] = "FOLDER_CHANNELS"
+                    plan["entities"].append(f"folder '{fname}' (matched in text)")
+                    plan["steps"].append(plan_step("list_folder_channels",
+                                                   "real Telegram folder channels", name=fname))
+                    plan["summary"] = f"List channels of folder '{fname}'"
+                    return plan
             tool = {"LIST_DIALOGS": "list_dialogs", "LIST_CHANNELS": "list_channels",
                     "HELP": "explain_capabilities"}[intent]
             plan["steps"].append(plan_step(tool, "read-only listing"))
@@ -3160,13 +3494,14 @@ class Planner:
             return plan
 
         # ---------- inspection / messages ----------
-        if intent in ("INSPECT_CHANNEL", "RECENT_MESSAGES", "SEARCH_MESSAGES",
+        if intent in ("INSPECT_CHANNEL", "RECENT_MESSAGES", "SEARCH_MESSAGES", "LATEST_MESSAGE",
                       "CHANNEL_ACTIVITY", "COMPARE_ACTIVITY", "ADMIN_RIGHTS"):
             refs = (f.get("ids") or []) + (f.get("usernames") or [])
             plan["_refs"] = refs
             tool = {"INSPECT_CHANNEL": "inspect_channel", "RECENT_MESSAGES": "get_recent_messages",
                     "SEARCH_MESSAGES": "search_messages", "CHANNEL_ACTIVITY": "channel_activity",
                     "COMPARE_ACTIVITY": "compare_measurable_activity",
+                    "LATEST_MESSAGE": "get_latest_message",
                     "ADMIN_RIGHTS": "inspect_admin_rights"}[intent]
             if intent == "COMPARE_ACTIVITY" and len(refs) >= 2:
                 plan["steps"].append(plan_step(tool, "compare two channels",
@@ -3229,8 +3564,48 @@ class Planner:
             return plan
 
         if intent == "MONITOR_STOP":
-            plan["steps"].append(plan_step("stop_monitor", "stop monitor(s)"))
-            plan["summary"] = "Stop monitoring"
+            stop_all = ("sab" in f["norm"] or " saare" in f["norm"] or "all" in f["norm"])
+            if stop_all:
+                plan["steps"].append(plan_step("stop_monitor", "stop ALL active monitors"))
+                plan["summary"] = "Stop all running monitors"
+                plan["confirmation_required"] = True
+                plan["risk"] = "medium"
+                return plan
+            ent, via = await self._resolve_channel(account_id, f, reply_ctx, allow_main=True)
+            if ent is None:
+                plan["missing"].append("which channel's monitor to stop (or 'stop all monitors')")
+                return plan
+            plan["entities"].append(f"{ent.brief()} ({via or 'resolved'})")
+            plan["steps"].append(plan_step("stop_monitor",
+                                           f"find + stop active monitor on {ent.title} (never create one)",
+                                           channel=ent.id))
+            plan["summary"] = f"Stop monitoring {ent.title}"
+            return plan
+
+        # ---------- forward latest post to saved messages (chained) ----------
+        if intent == "FORWARD_LATEST_SAVED":
+            ent, via = await self._resolve_channel(account_id, f, reply_ctx,
+                                                   allow_main=bool(f.get("kw_main_channel") or True))
+            if ent is None:
+                plan["missing"].append("which channel's post to forward")
+                return plan
+            plan["entities"].append(f"{ent.brief()} ({via or 'resolved'})")
+            if reply_ctx is not None and reply_ctx.message_id is not None \
+                    and not f.get("kw_latest") and int(ent.id) == int(reply_ctx.entity.id):
+                plan["steps"].append(plan_step(
+                    "forward_to_saved", "forward the exact replied message to Saved Messages",
+                    ref=ent.id, message_id=reply_ctx.message_id))
+            else:
+                plan["steps"].append(plan_step("get_latest_message",
+                                               "fetch the ACTUAL latest message", ref=ent.id))
+                step2 = plan_step("forward_to_saved",
+                                  "forward that exact message to Saved Messages + verify destination",
+                                  ref=ent.id,
+                                  message_id={"from_step": 0, "key": "message_id"})
+                step2["depends_on"] = [0]
+                plan["steps"].append(step2)
+            plan["summary"] = f"Forward latest post of {ent.title} to Saved Messages"
+            plan["risk"] = "low"
             return plan
 
         # ---------- delete (destructive, confirmation) ----------
@@ -3455,6 +3830,36 @@ def respond(reply: str, status: str = "SUCCESS", intent: str = "",
 
 INFO_INTENTS = {"CROSS_REQUIREMENTS_EXPLAIN", "HELP", "SYSTEM_STATUS"}
 
+MUTATING_INTENTS = {"DELETE_MESSAGES", "FORWARD_TO_MAIN", "POST_MAIN_NOW", "SCHEDULE_POST",
+                    "CROSS_START", "MONITOR_START", "MAIN_CHANNEL_CONFIG", "FOLDER_TO_MAIN",
+                    "TASK_CONTROL", "CROSS_STOP", "CROSS_RESET", "MONITOR_STOP", "SET_ALIAS",
+                    "FORWARD_LATEST_SAVED", "HEAL_SYSTEM"}
+
+PLAN_ONLY_RE = re.compile(
+    r"(do not execute|don'?t execute|no execution|without executing|plan only|plan -only|"
+    r"read only|sirf plan|plan banao|abhi nahi chalana|mat chalao|execute mat karo|"
+    r"abhi execute mat|abhi run mat|kuch change mat|change mat karna|kuch mat karna|"
+    r"kuch bhi mat karo|modify mat|do not modify|nothing change|nothing modify)", re.I)
+
+EXECUTE_PLAN_RE = re.compile(
+    r"^(ab\s+)?(execute|run|chala do|chalao)( the plan| it| karo| kar do| ab| do)?[.!]?$|"
+    r"^(ab\s+)?plan (execute|chala do|chalao)( karo| kar do)?[.!]?$|"
+    r"^go ahead[.!]?$|^execute karo ab[.!]?$|^ab execute[.!]?$", re.I)
+
+
+def detect_mode(text: str) -> Optional[str]:
+    """explicit non-execution phrases force PLAN mode (never mutated)."""
+    t = strip_command(text).lower()
+    if PLAN_ONLY_RE.search(t):
+        return "PLAN"
+    n, sk = norm_text(t), skeleton(t)
+    if has_kw(n, sk, ["run mat karo", "abhi mat karo"]):
+        return "PLAN"
+    return None
+
+
+class JarvisCore:
+
 
 class JarvisCore:
     def __init__(self) -> None:
@@ -3485,13 +3890,15 @@ class JarvisCore:
                              self.tasks, self.monitors, self.scheduler, self.cross, self.ctx)
         register_all_tools(self.registry, self.impl)
         self.impl.tool_registry = self.registry
+        self.impl.core = self
         self.nlu = NLU()
         self.planner = Planner(self)
         self.tasks.tick_handler = self._task_tick
         self.scheduler.execute_handler = self._schedule_execute
         self.admin_cache: dict[tuple, tuple[float, set]] = {}
         self._handler_clients: dict[str, Any] = {}
-        self.ai_available = bool(OPENAI_API_KEY)
+        self.ai = AIEngine(self.diag)
+        self.ai_available = self.ai.any_configured()
 
     # ---------------- tool dispatch with classified errors ----------------
     async def call_tool(self, name: str, account_id: str, **params) -> ToolResult:
@@ -3670,6 +4077,19 @@ class JarvisCore:
             self.ensure_handlers(target)
             return respond(f"YES SIR. Authorized as {r.get('name') or 'user'}.", "SUCCESS", "LOGIN")
 
+        # run a previously stored PLAN_ONLY plan
+        if EXECUTE_PLAN_RE.match(low):
+            plan = self.latest_plan(aid)
+            if plan is None:
+                return respond("SIR, no stored plan to execute.", "FAILED", "EXECUTE_PLAN")
+            self.pop_plan(plan["plan_id"])
+            if plan.get("confirmation_required"):
+                self.confirm.require(aid, plan["summary"], {"plan": plan})
+                return respond(f"SIR, this plan is {plan['risk']} risk and needs confirmation.\n"
+                               f"{plan['summary']}\nReply 'yes' within {CONFIRM_TTL}s.",
+                               "WAITING", plan["intent"], plan=self._plan_public(plan))
+            return await self.execute_plan(plan, confirmed=False)
+
         # reply context
         reply_ctx: Optional[ReplyContext] = None
         if reply_msg is not None:
@@ -3682,15 +4102,21 @@ class JarvisCore:
             except Exception:
                 reply_ctx = None
 
-        # NLU
+        # ---- understanding: deterministic NLU + validated AI brain ----
+        self.diag.info("NL_INPUT", "goal", short(strip_command(text), 140), account_id=aid)
         mains = self.accounts.get_main_channels(aid)
         feats = self.nlu.features(aid, text, reply_ctx is not None, len(mains))
         nres = self.nlu.classify(feats)
         intent = nres.intent
-        if intent is None and self.ai_available:
-            ai_intent = await self.ai_interpret(strip_command(text))
-            if ai_intent:
-                intent = ai_intent
+        if self.ai.any_configured():
+            decision = await self.ai_decide(aid, strip_command(text), feats, reply_ctx, mains)
+            if decision:
+                intent = decision["intent"] or intent
+                self._apply_ai_entities(feats, decision.get("entities") or {})
+                feats["ai"] = decision
+        self.diag.info("INTENT", "decide",
+                       f"{intent} (nlu_score={nres.score}{', ai:' + (feats.get('ai') or {}).get('provider', '') if feats.get('ai') else ', deterministic'})",
+                       account_id=aid)
         if intent is None:
             # real discovery: search registry by capability
             candidates = self.registry.search(strip_command(text), limit=4)
@@ -3718,6 +4144,13 @@ class JarvisCore:
             return respond(f"SIR, planning failed ({type(exc).__name__}). "
                            f"Details are in diagnostics.", "FAILED", intent)
         plan["source_surface"] = source
+        explicit_mode = detect_mode(text)
+        ai_mode = (feats.get("ai") or {}).get("mode") or None
+        mode = explicit_mode or ai_mode or \
+            ("EXECUTE" if intent in MUTATING_INTENTS else "READ")
+        plan["mode"] = mode
+        self.diag.info("MODE", "select", f"{mode}{' (explicit)' if explicit_mode else ''}",
+                       account_id=aid)
 
         # execute or only preview
         if plan_only:
@@ -3726,6 +4159,16 @@ class JarvisCore:
         if plan["missing"]:
             return respond("SIR, missing exactly:\n- " + "\n- ".join(plan["missing"]),
                            "MISSING_CONTEXT", intent, plan=self._plan_public(plan))
+        mutating_plan = intent in MUTATING_INTENTS or any(
+            (self.registry.get(s["tool"]) is not None and not self.registry.get(s["tool"]).read_only)
+            for s in plan["steps"])
+        if plan.get("mode") == "PLAN" and mutating_plan:
+            self.store_plan(plan)
+            txt = self._plan_preview_text(plan) + \
+                "\nMODE: PLAN ONLY - nothing was executed.\nSay 'execute the plan' to run it" + \
+                (" (confirmation will still be required)." if plan["confirmation_required"] else ".")
+            self.diag.info("PLAN", "hold", f"{intent} held as PLAN ONLY", account_id=aid)
+            return respond(txt, "WAITING", intent, plan=self._plan_public(plan))
         if plan["confirmation_required"]:
             self.confirm.require(aid, plan["summary"], {"plan": plan})
             return respond(
@@ -3737,6 +4180,7 @@ class JarvisCore:
     def _plan_public(self, plan: dict) -> dict:
         return {"plan_id": plan["plan_id"], "intent": plan["intent"], "summary": plan["summary"],
                 "entities": plan["entities"], "steps": plan["steps"], "risk": plan["risk"],
+                "mode": plan.get("mode", "READ"),
                 "confirmation_required": plan["confirmation_required"],
                 "missing": plan["missing"], "report_only": plan["report_only"],
                 "notes": plan["notes"]}
@@ -3774,6 +4218,11 @@ class JarvisCore:
             return fin(reply, status, data)
 
         # informational / report-only plans
+        if intent == "IDENTIFY_REPLY":
+            lines = ["YES SIR. Replied-message identification (read-only, nothing changed):"]
+            lines += [f"- {e}" for e in plan["entities"]]
+            return fin("\n".join(lines))
+
         if intent == "CROSS_REQUIREMENTS_EXPLAIN":
             lines = ["SIR, before Cross starts I verify all of this:"]
             lines += [f"{i+1}) {n}" for i, n in enumerate(plan["notes"])]
@@ -3793,10 +4242,28 @@ class JarvisCore:
             lines.append("Say 'Cross start karo' to execute this plan.")
             return fin("\n".join(lines))
 
-        # generic step execution
+        # generic step execution (ordered chain; depends_on placeholders resolved)
         outputs: list[ToolResult] = []
-        for step in plan["steps"]:
+        for idx, step in enumerate(plan["steps"]):
             tool = step["tool"]
+            params = dict(step.get("params") or {})
+            for pk, pv in list(params.items()):
+                if isinstance(pv, dict) and "from_step" in pv:
+                    si = int(pv["from_step"])
+                    if si >= len(outputs) or not outputs[si].ok \
+                            or (outputs[si].data or {}).get(pv.get("key")) is None:
+                        dep_code = outputs[si].error_code if si < len(outputs) else ERR_TOOL_UNAVAILABLE
+                        dep_err = outputs[si].error if si < len(outputs) else "step output missing"
+                        step["status"] = "SKIPPED"
+                        self.diag.err("EXECUTION", "chain",
+                                      f"aborted at step {idx+1}; dependency step {si+1} failed",
+                                      account_id=account_id, error_code=dep_code)
+                        return fin(f"FAILED, SIR. Plan chain aborted at step {idx+1} "
+                                   f"(depends on step {si+1}).\n[{dep_code}] {dep_err}",
+                                   "FAILED", {"aborted_at": idx + 1, "dependency": si + 1})
+                    params[pk] = (outputs[si].data or {}).get(pv.get("key"))
+            step["params"] = params
+            step["status"] = "RUNNING"
             if tool == "_post_to_main":
                 mains = self.accounts.get_main_channels(account_id)
                 if not mains:
@@ -3843,6 +4310,11 @@ class JarvisCore:
                 return fin(f"YES SIR. '{alias}' now means {ent.title} [{ent.id}].")
             r = await self.call_tool(tool, account_id, **step["params"])
             outputs.append(r)
+            step["status"] = "DONE" if r.ok else "FAILED"
+            self.diag.info("EXECUTION", "step",
+                           f"{idx+1}/{len(plan['steps'])} {tool} -> "
+                           f"{'DONE' if r.ok else 'FAILED ' + str(r.error_code)}",
+                           account_id=account_id)
             if not r.ok and intent not in ("TASK_LIST",):
                 return fin(self._failure_text(intent, step, r),
                            "FAILED" if r.status != "PERMISSION_REQUIRED" else "PERMISSION_REQUIRED",
@@ -4006,8 +4478,41 @@ class JarvisCore:
             return "\n".join(lines), "SUCCESS", d
 
         if intent == "MONITOR_STOP":
-            d = outputs[-1].data
-            return f"YES SIR. Monitoring stopped ({d.get('stopped', 0)} monitor(s)).", "SUCCESS", d
+            r = outputs[-1]
+            d = r.data or {}
+            ids = d.get("ids") or []
+            if not d.get("stopped"):
+                return "SIR, no active monitor matched that target - nothing was stopped.", \
+                    "FAILED", r.to_dict()
+            lines = [f"YES SIR. Stopped {d['stopped']} monitor(s): {', '.join(ids[:6])}.",
+                     f"Verification: persisted STOPPED = {'yes' if d.get('verified') else 'no'}.",
+                     "No new monitor was created."]
+            ctx_updates["monitor"] = {}
+            return "\n".join(lines), "SUCCESS", d
+
+        if intent == "LATEST_MESSAGE":
+            d = need("get_latest_message").data
+            lines = ["YES SIR. Latest post (read-only):",
+                     f"Channel: {d['entity']}",
+                     f"Message ID: {d['message_id']}",
+                     f"Date: {d.get('date_ktm') or d.get('date')}",
+                     f"Text: \"{d.get('text') or '[no text]'}\"",
+                     f"Media: {'yes (' + str(d.get('media_type')) + ')' if d.get('has_media') else 'no'}"
+                     + (f" | Views: {d.get('views')}" if d.get('views') is not None else ""),
+                     "Nothing was modified."]
+            ctx_updates["channel"] = {"id": d["entity_id"],
+                                      "title": d["entity"].split(" [")[0]}
+            ctx_updates["conversation"] = {}
+            return "\n".join(lines), "SUCCESS", d
+
+        if intent == "FORWARD_LATEST_SAVED":
+            r = need("forward_to_saved")
+            d = r.data
+            lines = ["DONE, SIR - verified delivery.",
+                     f"Source: {d['source']} (message #{d['source_message_id']})",
+                     f"Destination: your Saved Messages (message #{d['saved_message_id']})",
+                     "Verification: destination re-fetch confirmed."]
+            return "\n".join(lines), "SUCCESS", d
 
         if intent == "SCHEDULE_LIST":
             d = need("list_schedules").data
@@ -4146,6 +4651,35 @@ class JarvisCore:
             lines.append("Context (reply/context/main channel/folder/memory) fills parameters.")
             return "\n".join(lines), "SUCCESS", d
 
+        if intent == "SYSTEM_DIAGNOSTICS":
+            lines = ["YES SIR. System diagnostics:"]
+            for step_r, step in zip(outputs, plan["steps"]):
+                d = step_r.data or {}
+                if step["tool"] == "system_status":
+                    lines.append(f"- uptime {human_delta(d.get('uptime_sec', 0))} | tasks {d.get('tasks_active')} active | "
+                                 f"monitors {d.get('monitors_active')} | schedules {d.get('schedules_pending')}")
+                elif step["tool"] == "telegram_status":
+                    for a in d.get("accounts", []):
+                        lines.append(f"- {a['label']}: {'online+authorized' if a['authorized'] else ('connected, NOT authorized' if a['connected'] else 'offline')}"
+                                     + (f" ({a['last_error']})" if a.get('last_error') else ""))
+                elif step["tool"] == "task_health":
+                    lines.append(f"- unhealthy tasks: {d.get('count')}")
+                elif step["tool"] == "monitor_health":
+                    lines.append(f"- monitors needing attention: {d.get('count')}")
+                elif step["tool"] == "tool_health":
+                    bad = d.get("degraded_or_disabled") or []
+                    lines.append(f"- tools {d.get('total_tools')} registered | degraded/disabled: {len(bad)}")
+            lines.append("Say 'heal the system' to apply safe repairs.")
+            return "\n".join(lines), "SUCCESS", None
+
+        if intent == "HEAL_SYSTEM":
+            d = outputs[-1].data or {}
+            lines = ["HEALING REPORT (safe, predefined repairs only):"]
+            for op in d.get("ops", []):
+                lines.append(f"- {op.get('op')}: {op.get('detail')}")
+            lines.append(f"Healed at {d.get('healed_at')}. No secrets touched, no destructive actions.")
+            return "\n".join(lines), "SUCCESS", d
+
         # generic
         last = outputs[-1]
         pretty = json.dumps(last.data or {}, ensure_ascii=False, indent=1)[:1200]
@@ -4259,27 +4793,119 @@ class JarvisCore:
         lines.append("Same state visible in Web Control.")
         return "\n".join(lines)
 
-    # ---------------- AI fallback (mapping only, never execution) ----------------
-    async def ai_interpret(self, text: str) -> Optional[str]:
-        if not OPENAI_API_KEY:
+    # ---------------- real AI brain (validated decisions, never execution) ----------------
+    AI_EXTRA_INTENTS = {
+        "IDENTIFY_REPLY", "MAIN_CHANNEL_LIST", "MAIN_CHANNEL_CONFIG", "TASK_LIST", "TASK_CONTROL",
+        "LIST_CHANNELS", "LIST_FOLDERS", "LIST_DIALOGS", "HELP", "STATUS", "SET_ALIAS",
+        "FORWARD_LATEST_SAVED", "LATEST_MESSAGE", "ACCOUNT_SESSIONS", "CROSS_STATUS",
+        "COMPARE_ACTIVITY", "CHANNEL_ACTIVITY", "RECENT_MESSAGES", "SEARCH_MESSAGES",
+        "SCHEDULE_LIST", "SCHEDULE_CANCEL", "CROSS_REQUIREMENTS_EXPLAIN", "MONITOR_LIST",
+        "MONITOR_STOP", "CROSS_PLAN", "HEAL_SYSTEM", "SYSTEM_DIAGNOSTICS", "SYSTEM_STATUS",
+    }
+
+    def latest_plan(self, account_id: str) -> Optional[dict]:
+        plans = self.workflows_store.data["workflows"].setdefault("pending_plans", {})
+        cands = [(p.get("created_ts", 0), p) for p in plans.values()
+                 if p.get("account_id") == account_id
+                 and utc_now() - p.get("created_ts", 0) <= CONTEXT_TTL]
+        if not cands:
             return None
-        intents = sorted({i for s in self.registry.specs.values() for i in s.intents})
-        prompt = ("Map this Telegram-ops goal (Hinglish/English) to ONE intent string from: "
-                  + json.dumps(intents) + ". Reply with ONLY the intent string or NONE.")
+        cands.sort(key=lambda x: -x[0])
+        return cands[0][1]
+
+    def _validate_ai_decision(self, data: Any, allowed: set) -> Optional[dict]:
+        if not isinstance(data, dict):
+            return None
+        intent = str(data.get("intent") or "")
+        if intent not in allowed:
+            return None
+        mode = str(data.get("mode") or "").upper()
+        if mode not in AI_MODES:
+            mode = ""
+        ents = data.get("entities") if isinstance(data.get("entities"), dict) else {}
+        missing = [short(str(x), 80) for x in data.get("missing")][:6] \
+            if isinstance(data.get("missing"), list) else []
+        return {"intent": intent, "mode": mode, "entities": ents, "missing": missing,
+                "confirmation_required": bool(data.get("confirmation_required")),
+                "reason": short(str(data.get("reason") or ""), 180)}
+
+    def _apply_ai_entities(self, feats: dict, ents: dict) -> None:
+        for key in ("source", "target", "targets", "channel"):
+            v = ents.get(key)
+            v = str(v).strip() if v is not None else ""
+            if not v or v.lower() in ("null", "none", ""):
+                continue
+            lowv = v.lower()
+            if lowv in ("main_channel", "main channel", "main_channels"):
+                feats["kw_main_channel"] = True
+            elif lowv.startswith("folder:"):
+                feats["folder_name"] = v.split(":", 1)[1].strip()
+            elif lowv.startswith("folder "):
+                feats["folder_name"] = v[7:].strip()
+            elif re.fullmatch(r"-?\d{7,}", v) and v not in feats["ids"]:
+                feats["ids"].append(v)
+            elif re.fullmatch(r"@[\w_]{5,}", v) and v not in feats["usernames"]:
+                feats["usernames"].append(v)
+
+    async def ai_decide(self, account_id: str, goal: str, feats: dict,
+                        reply_ctx: Optional[ReplyContext], mains: list) -> Optional[dict]:
+        cfg = self.accounts.get(account_id)
+        rt = self.accounts.runtime.get(account_id)
+        folder_titles = []
         try:
-            async with httpx.AsyncClient(timeout=20) as h:
-                r = await h.post(f"{OPENAI_BASE_URL}/chat/completions",
-                                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                                 json={"model": OPENAI_MODEL, "temperature": 0,
-                                       "messages": [{"role": "system", "content": prompt},
-                                                    {"role": "user", "content": text}]})
-            content = (r.json()["choices"][0]["message"]["content"] or "").strip()
-            if content in intents:
-                self.diag.info("ai", "interpret", f"mapped -> {content}")
-                return content
+            folder_titles = [f["title"] for f in await self.resolver.get_folders(account_id)][:12]
+        except Exception:
+            folder_titles = []
+        active_tasks = [{"kind": t.kind, "status": t.status,
+                         "title": (t.params.get("source") or t.params.get("channel") or {}).get("title", t.goal[:28])}
+                        for t in self.tasks.active(account_id)][:8]
+        active_mons = [{"title": m["title"], "condition": m["condition"], "until": m.get("end_ktm")}
+                       for m in self.monitors.active_all(account_id)][:8]
+        relevant = [s.name for s in self.registry.search(goal, limit=14)]
+        pkg = {
+            "goal": goal, "ktm_now": ktm_iso(),
+            "account": {"label": cfg["label"], "authorized": bool(rt and rt.authorized)},
+            "main_channels": [{"id": c["id"], "title": c.get("title", "")} for c in mains][:10],
+            "folder_titles": folder_titles,
+            "reply": ({"channel": reply_ctx.entity.brief(), "channel_id": reply_ctx.entity.id,
+                       "message_id": reply_ctx.message_id, "text": reply_ctx.text,
+                       "has_media": reply_ctx.has_media} if reply_ctx else None),
+            "active_tasks": active_tasks, "active_monitors": active_mons,
+            "relevant_tools": relevant,
+        }
+        allowed = sorted({i for s in self.registry.specs.values() for i in s.intents}
+                         | self.AI_EXTRA_INTENTS)
+        system = (
+            "You are DEVIL JARVIS, the understanding+planning brain of a Telegram operations agent. "
+            "Understand the goal (English/Hindi/Hinglish/mixed, short or long, follow-up) and output "
+            "STRICT JSON ONLY with keys: intent (one of ALLOWED_INTENTS), mode "
+            "(READ|PLAN|EXECUTE|STOP|CONFIGURE|ASK), entities {source, targets}, missing [], "
+            "confirmation_required bool, reason short string.\n"
+            "Rules: pure information/display question -> READ; user says do-not-execute/plan-only/only-plan -> PLAN; "
+            "deletion/stop/destructive -> confirmation_required true; insufficient info -> list missing + mode ASK; "
+            "never invent channels or ids; 'replied' refers to CONTEXT.reply; folder names come from CONTEXT.folder_titles; "
+            "main channel means CONTEXT.main_channels[0].\n"
+            "ALLOWED_INTENTS: " + json.dumps(allowed))
+        try:
+            data, provider = await self.ai.decide(system, json.dumps(pkg, ensure_ascii=False))
         except Exception as exc:
-            self.diag.warn("ai", "interpret", f"provider unavailable ({type(exc).__name__})")
-        return None
+            self.diag.warn("AI_PROVIDER", "decision", type(exc).__name__,
+                           error_code=ERR_PROVIDER_UNAVAILABLE)
+            return None
+        if data is None:
+            self.diag.info("AI_PROVIDER", "decision",
+                           "no usable provider answer; deterministic NLU continues")
+            return None
+        valid = self._validate_ai_decision(data, set(allowed))
+        if valid is None:
+            self.diag.warn("AI_PROVIDER", "validate",
+                           "malformed/unsafe AI output ignored",
+                           error_code=ERR_AI_PARSE_FAILED)
+            return None
+        valid["provider"] = provider
+        self.diag.info("AI_PROVIDER", "accepted", f"{valid['intent']} via {provider}",
+                       account_id=account_id)
+        return valid
 
     # ---------------- engine hooks ----------------
     async def _task_tick(self, task: Task) -> None:
@@ -4468,6 +5094,91 @@ class JarvisCore:
             self.diag.err("telegram", "process", f"{type(exc).__name__}: {short(str(exc), 120)}",
                           account_id=account_id)
 
+    # ---------------- controlled healing ----------------
+    async def run_healing(self, account_id: Optional[str] = None) -> ToolResult:
+        self.diag.info("HEALING", "start", "controlled healing begins", account_id=account_id)
+        ops: list[dict] = []
+        # 1. reload + salvage JSON stores (quarantine already built into JSONStore)
+        for store in (self.accounts_store, self.sessions_store, self.brain_store,
+                      self.workflows_store, self.tasks_store, self.monitors_store,
+                      self.schedules_store, self.memory_store, self.runtime_store,
+                      self.tools_store):
+            try:
+                store.load()
+                ops.append({"op": f"json:{store.path.name}", "detail": "reloaded OK"})
+            except Exception as exc:
+                ops.append({"op": f"json:{store.path.name}", "detail": f"reload failed {type(exc).__name__}"})
+        # 2. clear stale context + expired confirmations
+        cleared = 0
+        brain = self.brain_store.data["brain"]
+        for raw in brain.values():
+            if utc_now() - raw.get("ts", 0) > CONTEXT_TTL:
+                for sec in ("channel", "folder", "task", "monitor", "cross"):
+                    raw[sec] = {}
+            wf = raw.get("workflow") or {}
+            p = wf.get("pending_confirmation")
+            if p and utc_now() > p.get("expires_at", 0):
+                wf.pop("pending_confirmation", None)
+                cleared += 1
+        self.brain_store.save()
+        ops.append({"op": "context.prune",
+                    "detail": f"stale context cleared, {cleared} expired confirmation(s) dropped"})
+        # 3. reconcile orphaned monitors/tasks
+        fixed_m = fixed_t = 0
+        for m in self.monitors.store.data["monitors"].values():
+            tid = m.get("task_id")
+            if m.get("status") == "ACTIVE" and tid:
+                t = self.tasks.get(tid)
+                if t is None or t.status in TS_TERMINAL:
+                    m["status"] = "STOPPED"
+                    fixed_m += 1
+        for t in self.tasks.list():
+            if t.kind == "monitor" and t.status in TS_ACTIVE_SET:
+                m = self.monitors.store.data["monitors"].get(t.params.get("monitor_id", ""))
+                if not m or m.get("status") != "ACTIVE":
+                    self.tasks.set_status(t, TS_WAITING, "healed: orphaned monitor task",
+                                          ERR_TASK_NOT_FOUND)
+                    fixed_t += 1
+        self.monitors.store.save()
+        ops.append({"op": "orphans.reconcile",
+                    "detail": f"monitors fixed: {fixed_m}, tasks fixed: {fixed_t}"})
+        # 4. refresh caches
+        self.resolver._dialog_cache.clear()
+        self.resolver._folder_cache.clear()
+        ops.append({"op": "cache.refresh", "detail": "dialog + folder caches cleared"})
+        # 5. reconnect clients (best-effort, bounded, never blocking web)
+        for a in self.accounts.all():
+            aid = a["account_id"]
+            if account_id and aid != account_id:
+                continue
+            rt = self.accounts.runtime.get(aid)
+            if rt and not rt.connected and self.accounts.load_session(aid):
+                try:
+                    await asyncio.wait_for(self.accounts.connect(aid), timeout=25)
+                    self.ensure_handlers(aid)
+                    ops.append({"op": f"reconnect:{a['label']}", "detail": "reconnected"})
+                except Exception as exc:
+                    ops.append({"op": f"reconnect:{a['label']}",
+                                "detail": f"failed: {type(exc).__name__}"})
+        # 6. restart eligible runners / mark WAITING where account offline
+        resumed = 0
+        for t in self.tasks.list():
+            if t.status in TS_ACTIVE_SET and t.resumable:
+                rt = self.accounts.runtime.get(t.account_id)
+                if rt and rt.authorized:
+                    self.tasks.start_runner(t)
+                    resumed += 1
+                else:
+                    t.status = TS_WAITING
+                    t.last_error = "healed: account offline, waiting for login"
+                    self.tasks.save_task(t)
+        ops.append({"op": "runners.reconcile", "detail": f"{resumed} runner(s) restarted"})
+        self.diag.ok("HEALING", "complete", f"{len(ops)} safe operations applied",
+                     account_id=account_id)
+        self.diag.persist()
+        return ToolResult.success({"ops": ops, "healed_at": iso()},
+                                  verification={"operations": len(ops)})
+
     # ---------------- snapshots ----------------
     def status_snapshot(self) -> dict:
         diag = self.diag.snapshot()
@@ -4489,7 +5200,8 @@ class JarvisCore:
                                  "monitors", "scheduled_jobs", "channel_memory", "runtime", "tools")}
         return {"ok": True, "time": iso(), "ktm": ktm_iso(),
                 "uptime_sec": diag["uptime_sec"], "telethon": TELETHON_OK,
-                "ai_available": self.ai_available, "accounts": accounts, "tasks": tasks,
+                "ai_available": self.ai_available, "ai": self.ai.status_public(),
+                "accounts": accounts, "tasks": tasks,
                 "monitors": self.monitors.active_all(),
                 "schedules": self.scheduler.pending(),
                 "confirmations": confirmations, "diag": diag, "persistence": persistence,
@@ -4626,6 +5338,88 @@ def build_app() -> "FastAPI":
         else:
             res = await CORE.execute_plan(plan, confirmed=False)
         return JSONResponse(res)
+
+    # ---- ai / heal / selftest / probes ----
+    @app.get("/api/ai")
+    async def api_ai() -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        return JSONResponse({"ok": True, **CORE.ai.status_public()})
+
+    @app.post("/api/heal")
+    async def api_heal() -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        r = await CORE.run_healing(None)
+        return JSONResponse(r.to_dict())
+
+    @app.post("/api/selftest")
+    async def api_selftest() -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        out = run_selftest(CORE)
+        CORE.diag.info("HEALING", "selftest", f"{out['pass']} passed, {out['fail']} failed")
+        return JSONResponse({"ok": out["fail"] == 0, **out})
+
+    @app.get("/api/folders")
+    async def api_folders(request: "Request") -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        aid = CORE.accounts.resolve_ref(request.query_params.get("aid"))
+        if not aid and CORE.accounts.all():
+            aid = CORE.accounts.all()[0]["account_id"]
+        if not aid:
+            return JSONResponse({"ok": False, "error": "no account configured"}, status_code=400)
+        r = await CORE.call_tool("list_folders", aid)
+        return JSONResponse(r.to_dict())
+
+    @app.post("/api/folders/inspect")
+    async def api_folder_inspect(request: "Request") -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        b = await body(request)
+        aid = CORE.accounts.resolve_ref(str(b.get("aid") or ""))
+        if not aid and CORE.accounts.all():
+            aid = CORE.accounts.all()[0]["account_id"]
+        if not aid:
+            return JSONResponse({"ok": False, "error": "no account configured"}, status_code=400)
+        r = await CORE.call_tool("inspect_folder", aid, name=str(b.get("name") or ""))
+        return JSONResponse(r.to_dict())
+
+    @app.post("/api/channels/latest")
+    async def api_channel_latest(request: "Request") -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        b = await body(request)
+        aid = CORE.accounts.resolve_ref(str(b.get("aid") or ""))
+        if not aid and CORE.accounts.all():
+            aid = CORE.accounts.all()[0]["account_id"]
+        if not aid:
+            return JSONResponse({"ok": False, "error": "no account configured"}, status_code=400)
+        ref = str(b.get("ref") or "").strip()
+        r = await CORE.call_tool("get_latest_message", aid,
+                                 ref=(ref or None), use_main_channel=not bool(ref))
+        return JSONResponse(r.to_dict())
+
+    @app.post("/api/channels/inspect")
+    async def api_channel_inspect(request: "Request") -> "JSONResponse":
+        g = guard()
+        if g:
+            return g
+        b = await body(request)
+        aid = CORE.accounts.resolve_ref(str(b.get("aid") or ""))
+        if not aid and CORE.accounts.all():
+            aid = CORE.accounts.all()[0]["account_id"]
+        if not aid or not str(b.get("ref") or "").strip():
+            return JSONResponse({"ok": False, "error": "account/ref required"}, status_code=400)
+        r = await CORE.call_tool("inspect_channel", aid, ref=str(b.get("ref")).strip())
+        return JSONResponse(r.to_dict())
 
     # ---- toolbox ----
     @app.get("/api/tools")
@@ -4832,6 +5626,181 @@ app = build_app() if WEB_OK else None
 # 20. ENTRYPOINT (Render: 0.0.0.0 + PORT)
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# 21. OFFLINE SELFTEST - python main.py selftest | POST /api/selftest
+# ----------------------------------------------------------------------------
+
+def run_selftest(core: Optional["JarvisCore"]) -> dict:
+    results: list[dict] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results.append({"name": name, "pass": bool(ok), "detail": short(str(detail), 200)})
+
+    try:
+        compile((ROOT / "main.py").read_text(encoding="utf-8"), "main.py", "exec")
+        check("SYNTAX", True)
+    except Exception as exc:
+        check("SYNTAX", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        import fastapi as _f, uvicorn as _u, httpx as _h  # noqa: F401
+        check("IMPORTS", TELETHON_OK, "ok" if TELETHON_OK else TELETHON_ERR)
+    except Exception as exc:
+        check("IMPORTS", False, type(exc).__name__)
+
+    if core is not None:
+        try:
+            bad = [s.name for s in core.registry.specs.values()
+                   if s.handler is None or not s.intents or not s.description]
+            n = len(core.registry.specs)
+            check("TOOL REGISTRY", not bad and n >= 40,
+                  f"{n} tools, intents wired" + (f"; INVALID: {bad}" if bad else ""))
+        except Exception as exc:
+            check("TOOL REGISTRY", False, type(exc).__name__)
+    else:
+        check("TOOL REGISTRY", False, "no core")
+
+    try:
+        cases = {"for 1 hour": 3600, "30 minutes": 1800, "2 ghante": 7200, "5 minute": 300}
+        ok = all(parse_time_spec(k).get("sec") == v for k, v in cases.items())
+        u10 = parse_time_spec("until 10 PM")
+        ok = ok and u10.get("kind") == "at" and datetime.fromtimestamp(u10["ts"], tz=KTM).hour == 22
+        k7 = parse_time_spec("kal subah 7 baje")
+        ok = ok and k7.get("kind") == "at" and datetime.fromtimestamp(k7["ts"], tz=KTM).hour == 7
+        r10 = parse_time_spec("raat 10 baje")
+        ok = ok and r10.get("kind") == "at" and datetime.fromtimestamp(r10["ts"], tz=KTM).hour == 22
+        check("NL TIME (KTM)", ok)
+    except Exception as exc:
+        check("NL TIME (KTM)", False, type(exc).__name__)
+
+    try:
+        plan_phrases = ["do not execute", "abhi execute mat karo", "plan only",
+                        "kuch change mat karo", "plan banao, execute mat karna", "read only"]
+        ok = all(detect_mode(p) == "PLAN" for p in plan_phrases)
+        ok = ok and detect_mode("start cross") is None and detect_mode("monitor karo") is None
+        check("MODE DETECTION", ok)
+    except Exception as exc:
+        check("MODE DETECTION", False, type(exc).__name__)
+
+    nlu = NLU()
+    regressions = [
+        ("Show my configured Main Channel.", False, {"MAIN_CHANNEL_LIST"}),
+        ("Show the latest post from my Main Channel. Do not modify anything.", False, {"LATEST_MESSAGE"}),
+        ("Forward the latest post from my Main Channel to Saved Messages.", False, {"FORWARD_LATEST_SAVED"}),
+        ("Stop monitoring my Main Channel.", False, {"MONITOR_STOP"}),
+        ("List every channel in RAN X CROXX.", False, {"LIST_CHANNELS", "FOLDER_CHANNELS"}),
+        ("Identify the exact channel and message ID of the message I replied to.", True, {"IDENTIFY_REPLY"}),
+        ("Create a Cross plan using my replied message as source and RAN X CROXX as targets for 1 hour. Do not execute.", True, {"CROSS_PLAN"}),
+        ("Start Cross.", False, {"CROSS_START"}),
+        ("Delete the latest post from my Main Channel.", False, {"DELETE_MESSAGES"}),
+        ("List all currently running tasks and monitors.", False, {"TASK_LIST"}),
+        ("Show safe information about my Telegram account.", False, {"ACCOUNT_INFO"}),
+        ("Main channel ko watch karo, unknown sender aaye to Saved Messages me alert karo.", False, {"MONITOR_START"}),
+        ("Main channel ko watch karo. Main sone ja raha hoon. Dhyan rakhna.", False, {"MONITOR_START"}),
+        ("RAN X CROXX folder inspect karo aur channels ki list do.", False, {"FOLDER_CHANNELS", "INSPECT_FOLDER"}),
+        ("Replied message ko source rakho aur RAN X CROXX folder ko target rakho.", True, {"CROSS_PLAN", "FOLDER_TO_MAIN"}),
+        ("me sona ja rha hu thk chanel dhyn rkhna", False, {"MONITOR_START"}),
+        ("Stop all running monitors.", False, {"MONITOR_STOP", "TASK_CONTROL"}),
+    ]
+    fails = []
+    for text, has_reply, expects in regressions:
+        try:
+            feats = nlu.features("acc_selftest", text, has_reply, 1)
+            got = nlu.classify(feats).intent
+            if got not in expects:
+                fails.append(f"'{short(text, 36)}' -> {got} (want {sorted(expects)})")
+        except Exception as exc:
+            fails.append(f"'{short(text, 28)}' err {type(exc).__name__}")
+    check("NLU REGRESSIONS (17)", not fails,
+          "; ".join(fails[:6]) if fails else f"{len(regressions)}/{len(regressions)} mapped")
+
+    if core is not None:
+        try:
+            allowed = {i for s in core.registry.specs.values() for i in s.intents} | core.AI_EXTRA_INTENTS
+            bad1 = core._validate_ai_decision({"intent": "INVENTED_INTENT"}, allowed)
+            bad2 = core._validate_ai_decision("garbage", allowed)
+            good = core._validate_ai_decision({"intent": "LATEST_MESSAGE", "mode": "READ",
+                                               "entities": {"source": "main_channel"},
+                                               "missing": [], "confirmation_required": False}, allowed)
+            check("AI OUTPUT VALIDATOR", bad1 is None and bad2 is None and bool(good))
+        except Exception as exc:
+            check("AI OUTPUT VALIDATOR", False, type(exc).__name__)
+
+    try:
+        tmp = DATA_DIR / "_selftest_tmp.json"
+        JSONStore(tmp, "x")
+        tmp.write_text("{corrupt :", encoding="utf-8")
+        st = JSONStore(tmp, "x")
+        ok = isinstance(st.data, dict) and "x" in st.data
+        for f in DATA_DIR.glob("_selftest_tmp*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        check("JSON CORRUPTION RECOVERY", ok)
+    except Exception as exc:
+        check("JSON CORRUPTION RECOVERY", False, type(exc).__name__)
+
+    try:
+        tmpstore = JSONStore(DATA_DIR / "_selftest_brain.json", "brain")
+        ctx2 = BrainContext(tmpstore)
+        cf = ConfirmationEngine(ctx2, Diagnostics(tmpstore))
+        cf.require("acc_t", "test-op", {"plan": {}})
+        ok = cf.pending("acc_t") is not None and cf.matches("yes") is True
+        consumed = cf.consume("acc_t")
+        ok = ok and bool(consumed) and consumed.get("desc") == "test-op"
+        ok = ok and cf.consume("acc_t") is None
+        cf.require("acc_t", "test-op-2", {"plan": {}})
+        wf = ctx2.get("acc_t", "workflow") or {}
+        if isinstance(wf.get("pending_confirmation"), dict):
+            wf["pending_confirmation"]["expires_at"] = utc_now() - 1
+            tmpstore.save()
+        ok = ok and cf.pending("acc_t") is None
+        (DATA_DIR / "_selftest_brain.json").unlink(missing_ok=True)
+        check("CONFIRMATION (single-use + expiry)", ok)
+    except Exception as exc:
+        check("CONFIRMATION", False, type(exc).__name__)
+
+    try:
+        sample = "me sona ja rha hu thk chanel dhyn rkhna"
+        n, sk = norm_text(sample), skeleton(sample)
+        ok = has_kw(n, sk, KW["watch"]) and has_kw(n, sk, KW["sleep_away"]) \
+            and bool(re.search(r"\b(channel|chanel|chennal|group|chat)\b", sample))
+        check("FUZZY NLU (typos)", ok)
+    except Exception as exc:
+        check("FUZZY NLU", False, type(exc).__name__)
+
+    try:
+        check("FOLDER NAME EXTRACTION",
+              extract_folder_name("RAN X CROXX folder ko inspect karo") == "ran x croxx",
+              extract_folder_name("RAN X CROXX folder ko inspect karo") or "none")
+    except Exception as exc:
+        check("FOLDER NAME EXTRACTION", False, type(exc).__name__)
+
+    missing = [n for n in ("accounts", "sessions", "brain", "workflows", "tasks", "monitors",
+                           "scheduled_jobs", "channel_memory", "runtime", "tools")
+               if not (DATA_DIR / f"{n}.json").exists()]
+    check("PERSISTENCE FILES", not missing, f"missing: {missing}" if missing else "all present")
+
+    if core is not None:
+        try:
+            st = core.ai.status_public()
+            conf = [p["name"] for p in st["providers"] if p["configured"]]
+            notc = [p["name"] for p in st["providers"] if not p["configured"]]
+            check("AI PROVIDERS STATUS", True,
+                  f"configured: {conf or 'NONE'} | NOT CONFIGURED: {notc}")
+        except Exception as exc:
+            check("AI PROVIDERS STATUS", False, type(exc).__name__)
+
+    passed = sum(1 for r in results if r["pass"])
+    return {"pass": passed, "fail": len(results) - passed,
+            "total": len(results), "results": results}
+
+
+# ----------------------------------------------------------------------------
+# 22. ENTRYPOINT (Render: 0.0.0.0 + PORT)
+# ----------------------------------------------------------------------------
+
 def banner() -> None:
     print("=" * 66)
     print(" JARVIS CORE v2 - goal-driven mini brain + telegram toolbox")
@@ -4845,6 +5814,20 @@ def banner() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "selftest":
+        _core = JarvisCore()
+        out = run_selftest(_core)
+        print("=" * 66)
+        print(" JARVIS OFFLINE SELFTEST")
+        print("=" * 66)
+        for r in out["results"]:
+            line = f" [{'PASS' if r['pass'] else 'FAIL'}] {r['name']}"
+            if r["detail"]:
+                line += f" - {r['detail']}"
+            print(line)
+        print("-" * 66)
+        print(f" RESULT: {out['pass']} passed, {out['fail']} failed of {out['total']}")
+        sys.exit(0 if out["fail"] == 0 else 1)
     banner()
     if not WEB_OK:
         print("FATAL: fastapi/uvicorn/httpx missing. pip install -r requirements.txt")

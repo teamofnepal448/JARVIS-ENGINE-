@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>J.A.R.V.I.S v2 — Web Control Center</title>
+<title>DEVIL JARVIS — Production Control Center</title>
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,51 +16,48 @@
     background: linear-gradient(160deg, rgba(13,20,36,.82), rgba(6,10,20,.88));
     border: 1px solid rgba(56,189,248,.14);
     box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 18px 50px -20px rgba(0,0,0,.8), inset 0 1px 0 rgba(148,197,255,.06);
-    backdrop-filter: blur(10px);
-    border-radius: 1rem;
+    backdrop-filter: blur(10px); border-radius: 1rem;
   }
   .hud-title { letter-spacing: .22em; font-size: .68rem; color: #7dd3fc; text-transform: uppercase; }
-  .scanline::after {
-    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 40;
-    background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px);
-    mix-blend-mode: overlay;
-  }
+  .scanline::after { content:""; position:fixed; inset:0; pointer-events:none; z-index:40;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px); mix-blend-mode: overlay; }
   .glow-text { text-shadow: 0 0 18px rgba(56,189,248,.55), 0 0 60px rgba(56,189,248,.25); }
-  .dot { width: .55rem; height: .55rem; border-radius: 9999px; display:inline-block; }
+  .dot { width:.55rem; height:.55rem; border-radius:9999px; display:inline-block; }
   .dot.on { background:#34d399; box-shadow:0 0 10px #34d399; animation:pulse 2.2s infinite; }
   .dot.warn { background:#fbbf24; box-shadow:0 0 10px #fbbf24; animation:pulse 2.2s infinite; }
   .dot.off { background:#475569; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-  .panel-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
-  .panel-scroll::-webkit-scrollbar-thumb { background: rgba(56,189,248,.25); border-radius: 99px; }
+  .panel-scroll::-webkit-scrollbar { width:6px; height:6px; }
+  .panel-scroll::-webkit-scrollbar-thumb { background:rgba(56,189,248,.25); border-radius:99px; }
   .badge { font-family:'JetBrains Mono'; font-size:.6rem; padding:.15rem .45rem; border-radius:.4rem;
            border:1px solid rgba(148,163,184,.25); letter-spacing:.06em; white-space:nowrap; }
-  .st-RUNNING,.st-ACTIVE,.st-MONITORING,.st-ok { color:#34d399; border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
-  .st-PAUSED { color:#fbbf24; border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
-  .st-FAILED,.st-EXPIRED,.st-degraded { color:#f87171; border-color:rgba(248,113,113,.4); background:rgba(248,113,113,.08); }
-  .st-WAITING,.st-PENDING,.st-PLANNING { color:#7dd3fc; border-color:rgba(125,211,252,.4); background:rgba(125,211,252,.08); }
-  .st-COMPLETED,.st-SUCCESS,.st-DONE { color:#a7f3d0; border-color:rgba(167,243,208,.35); background:rgba(167,243,208,.06); }
+  .st-RUNNING,.st-ACTIVE,.st-MONITORING,.st-ok,.st-PASS { color:#34d399; border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
+  .st-PAUSED,.st-WARN { color:#fbbf24; border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
+  .st-FAILED,.st-EXPIRED,.st-degraded,.st-FAIL { color:#f87171; border-color:rgba(248,113,113,.4); background:rgba(248,113,113,.08); }
+  .st-WAITING,.st-PENDING,.st-PLANNING,.st-READ,.st-PLAN { color:#7dd3fc; border-color:rgba(125,211,252,.4); background:rgba(125,211,252,.08); }
+  .st-COMPLETED,.st-SUCCESS,.st-DONE,.st-EXECUTE { color:#a7f3d0; border-color:rgba(167,243,208,.35); background:rgba(167,243,208,.06); }
   .st-STOPPED,.st-CANCELLED { color:#94a3b8; }
-  .btn { transition: all .18s ease; }
-  .btn:hover { transform: translateY(-1px); }
-  .input-hud { background: rgba(2,6,17,.75); border:1px solid rgba(56,189,248,.25); box-shadow: inset 0 0 20px rgba(2,8,20,.9); }
-  .input-hud:focus-within { border-color: rgba(56,189,248,.6); box-shadow: 0 0 0 1px rgba(56,189,248,.35), inset 0 0 20px rgba(2,8,20,.9); }
-  .msg-jarvis { border-left: 2px solid rgba(56,189,248,.6); }
-  .msg-user { border-left: 2px solid rgba(167,139,250,.55); }
-  .diag-ERROR { color:#fca5a5; } .diag-WARN { color:#fcd34d; }
-  .diag-SUCCESS { color:#6ee7b7; } .diag-INFO { color:#93c5fd; }
-  #boot { transition: opacity .9s ease; }
-  .chip { transition: all .16s ease; cursor:pointer; }
-  .chip:hover { border-color: rgba(56,189,248,.7); color:#bae6fd; background:rgba(56,189,248,.08); }
-  .fade-in { animation: fadein .35s ease both; }
-  @keyframes fadein { from { opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
-  .bar-anim { transition: width .3s ease; }
-  .tool-row { transition: background .15s ease; }
-  .tool-row:hover { background: rgba(56,189,248,.05); }
+  .btn { transition:all .18s ease; } .btn:hover { transform:translateY(-1px); }
+  .input-hud { background:rgba(2,6,17,.75); border:1px solid rgba(56,189,248,.25); box-shadow:inset 0 0 20px rgba(2,8,20,.9); }
+  .input-hud:focus-within { border-color:rgba(56,189,248,.6); box-shadow:0 0 0 1px rgba(56,189,248,.35), inset 0 0 20px rgba(2,8,20,.9); }
+  .msg-jarvis { border-left:2px solid rgba(56,189,248,.6); }
+  .msg-user { border-left:2px solid rgba(167,139,250,.55); }
+  .diag-ERROR { color:#fca5a5; } .diag-WARN { color:#fcd34d; } .diag-SUCCESS { color:#6ee7b7; } .diag-INFO { color:#93c5fd; }
+  #boot { transition:opacity .9s ease; }
+  .chip { transition:all .16s ease; cursor:pointer; }
+  .chip:hover { border-color:rgba(56,189,248,.7); color:#bae6fd; background:rgba(56,189,248,.08); }
+  .fade-in { animation:fadein .35s ease both; }
+  @keyframes fadein { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+  .bar-anim { transition:width .3s ease; }
+  .tool-row:hover { background:rgba(56,189,248,.05); }
   .switch { position:relative; width:30px; height:16px; border-radius:99px; background:#1e293b; border:1px solid rgba(148,163,184,.3); cursor:pointer; transition:all .2s; }
   .switch.on { background:rgba(52,211,153,.25); border-color:rgba(52,211,153,.6); }
   .switch::after { content:""; position:absolute; top:2px; left:2px; width:10px; height:10px; border-radius:99px; background:#94a3b8; transition:all .2s; }
   .switch.on::after { left:16px; background:#34d399; box-shadow:0 0 8px #34d399; }
+  .stat-card { position:relative; overflow:hidden; }
+  .stat-card::before { content:""; position:absolute; inset:0; background:linear-gradient(120deg, rgba(56,189,248,.08), transparent 55%); pointer-events:none; }
+  .skeleton { animation:sk 1.2s ease-in-out infinite alternate; background:rgba(148,163,184,.12); border-radius:.4rem; }
+  @keyframes sk { from{opacity:.4} to{opacity:.9} }
 </style>
 </head>
 <body class="scanline text-slate-200 min-h-screen overflow-x-hidden">
@@ -72,11 +69,10 @@
   <div class="absolute inset-0" style="background-image:linear-gradient(rgba(56,189,248,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,.05) 1px, transparent 1px); background-size:44px 44px; mask-image:radial-gradient(ellipse at center, black 35%, transparent 78%);"></div>
 </div>
 
-<!-- BOOT -->
 <div id="boot" class="fixed inset-0 z-50 bg-[#04060c] flex items-center justify-center">
   <div class="w-[min(34rem,90vw)]">
-    <div class="mono text-[.65rem] tracking-[.3em] text-cyan-500/80 mb-3">GOAL-DRIVEN AUTOMATION SYSTEM</div>
-    <h1 class="text-4xl font-bold text-cyan-300 glow-text mono">J.A.R.V.I.S <span class="text-lg text-cyan-600">v2</span></h1>
+    <div class="mono text-[.65rem] tracking-[.3em] text-cyan-500/80 mb-3">PRODUCTION TELEGRAM AI CONTROL</div>
+    <h1 class="text-4xl font-bold text-cyan-300 glow-text mono">DEVIL JARVIS</h1>
     <div class="mono text-xs text-slate-400 mt-4 space-y-1.5 h-28" id="bootLog"></div>
     <div class="mt-4 h-1 bg-slate-800 rounded overflow-hidden">
       <div id="bootBar" class="h-full bg-cyan-400/80 bar-anim" style="width:5%"></div>
@@ -84,42 +80,72 @@
   </div>
 </div>
 
-<!-- HEADER -->
-<header class="relative z-10 border-b border-cyan-500/10 bg-[#060a14]/70 backdrop-blur-md">
-  <div class="max-w-[1560px] mx-auto px-5 py-3 flex items-center gap-5 flex-wrap">
+<header class="relative z-10 border-b border-cyan-500/10 bg-[#060a14]/70 backdrop-blur-md sticky top-0">
+  <div class="max-w-[1600px] mx-auto px-5 py-3 flex items-center gap-4 flex-wrap">
     <div class="flex items-center gap-3">
       <div class="w-9 h-9 rounded-lg border border-cyan-400/40 flex items-center justify-center bg-cyan-400/10 shadow-[0_0_20px_rgba(56,189,248,.25)]">
         <i data-lucide="brain-circuit" class="w-5 h-5 text-cyan-300"></i>
       </div>
       <div>
-        <div class="mono font-bold text-cyan-200 tracking-[.25em] leading-none">J.A.R.V.I.S <span class="text-cyan-600 text-xs">v2 MINI BRAIN</span></div>
-        <div class="text-[.6rem] text-slate-500 tracking-[.2em] mt-1">UNDERSTAND · RESOLVE · DISCOVER · PLAN · EXECUTE · VERIFY</div>
+        <div class="mono font-bold text-cyan-200 tracking-[.25em] leading-none">DEVIL JARVIS</div>
+        <div class="text-[.58rem] text-slate-500 tracking-[.2em] mt-1">UNDERSTAND · RESOLVE · DISCOVER · PLAN · CONFIRM · EXECUTE · VERIFY</div>
       </div>
     </div>
+    <nav class="hidden md:flex items-center gap-1 mono text-[.6rem]">
+      <a href="#sec-dash" class="chip badge text-slate-400 border-transparent">DASHBOARD</a>
+      <a href="#sec-console" class="chip badge text-slate-400 border-transparent">CONSOLE</a>
+      <a href="#sec-channels" class="chip badge text-slate-400 border-transparent">CHANNELS</a>
+      <a href="#sec-folders" class="chip badge text-slate-400 border-transparent">FOLDERS</a>
+      <a href="#sec-tools" class="chip badge text-slate-400 border-transparent">TOOLS</a>
+      <a href="#sec-ai" class="chip badge text-slate-400 border-transparent">AI</a>
+      <a href="#sec-heal" class="chip badge text-slate-400 border-transparent">HEAL</a>
+    </nav>
     <div class="flex items-center gap-2.5 ml-auto flex-wrap">
       <span class="badge flex items-center gap-1.5" id="pillTelethon"><span class="dot off"></span>TELETHON</span>
-      <span class="badge flex items-center gap-1.5" id="pillAI"><span class="dot off"></span>NLU</span>
+      <span class="badge flex items-center gap-1.5" id="pillAI"><span class="dot off"></span>AI</span>
       <span class="badge flex items-center gap-1.5" id="pillTools">TOOLS —</span>
       <span class="badge flex items-center gap-1.5"><i data-lucide="timer" class="w-3 h-3"></i><span id="uptime">0s</span></span>
       <span class="badge flex items-center gap-1.5"><i data-lucide="clock" class="w-3 h-3"></i><span id="clock">--:--:--</span></span>
-      <span class="badge flex items-center gap-1.5 text-emerald-300 border-emerald-400/30 bg-emerald-400/5"><span class="dot on"></span>LIVE SYNC</span>
+      <span class="badge flex items-center gap-1.5 text-emerald-300 border-emerald-400/30 bg-emerald-400/5"><span class="dot on"></span>LIVE</span>
     </div>
   </div>
 </header>
 
-<main class="relative z-10 max-w-[1560px] mx-auto px-5 py-5 space-y-5">
+<main class="relative z-10 max-w-[1600px] mx-auto px-5 py-5 space-y-5">
+
+<!-- ════ OVERVIEW ════ -->
+<section id="sec-dash" class="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3" >
+  <div class="hud-panel stat-card p-3.5" ><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">JARVIS</div>
+    <div class="mono text-lg text-cyan-200 mt-1" id="statJarvis">—</div><div class="mono text-[.55rem] text-slate-500" id="statJarvisSub">booting</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">TELEGRAM</div>
+    <div class="mono text-lg mt-1" id="statTg">—</div><div class="mono text-[.55rem] text-slate-500" id="statTgSub">—</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">AI PROVIDERS</div>
+    <div class="mono text-lg mt-1" id="statAI">—</div><div class="mono text-[.55rem] text-slate-500" id="statAISub">—</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">ACCOUNTS</div>
+    <div class="mono text-lg mt-1" id="statAccounts">—</div><div class="mono text-[.55rem] text-slate-500" id="statAccountsSub">—</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">ACTIVE TASKS</div>
+    <div class="mono text-lg mt-1" id="statTasks">—</div><div class="mono text-[.55rem] text-slate-500">task engine</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">MONITORS</div>
+    <div class="mono text-lg mt-1" id="statMonitors">—</div><div class="mono text-[.55rem] text-slate-500">watch engine</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">SCHEDULED</div>
+    <div class="mono text-lg mt-1" id="statSchedules">—</div><div class="mono text-[.55rem] text-slate-500">queue (KTM)</div></div>
+  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">RECENT ERRORS</div>
+    <div class="mono text-lg mt-1" id="statErrors">—</div><div class="mono text-[.55rem] text-slate-500" id="statErrorsSub">—</div></div>
+</section>
+
 <div class="grid grid-cols-12 gap-5">
 
   <!-- LEFT: ACCOUNTS + PERSISTENCE -->
   <section class="col-span-12 lg:col-span-3 space-y-5">
-    <div class="hud-panel relative p-4">
+    <div class="hud-panel p-4">
       <div class="flex items-center justify-between mb-3">
         <div class="hud-title flex items-center gap-2"><i data-lucide="users" class="w-3.5 h-3.5"></i>Accounts</div>
         <button id="btnAddAccount" class="btn text-[.65rem] mono px-2.5 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1">
-          <i data-lucide="user-plus" class="w-3 h-3"></i>ADD
-        </button>
+          <i data-lucide="user-plus" class="w-3 h-3"></i>ADD</button>
       </div>
-      <div id="accountsList" class="space-y-3 panel-scroll max-h-[26rem] overflow-y-auto pr-1"></div>
+      <div id="accountsList" class="space-y-3 panel-scroll max-h-[24rem] overflow-y-auto pr-1">
+        <div class="skeleton h-24"></div>
+      </div>
     </div>
     <div class="hud-panel p-4">
       <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="database" class="w-3.5 h-3.5"></i>Persistence (data/)</div>
@@ -129,9 +155,9 @@
   </section>
 
   <!-- CENTER: GOAL CONSOLE -->
-  <section class="col-span-12 lg:col-span-6 space-y-5">
-    <div class="hud-panel relative p-5">
-      <div class="hud-title flex items-center gap-2 mb-4"><i data-lucide="terminal" class="w-3.5 h-3.5"></i>Goal Console — goal in, plan out, verified execution</div>
+  <section id="sec-console" class="col-span-12 lg:col-span-6 space-y-5">
+    <div class="hud-panel p-5">
+      <div class="hud-title flex items-center gap-2 mb-4"><i data-lucide="terminal" class="w-3.5 h-3.5"></i>Goal Console — goal → intent → entities → plan → tools → risk → verified execution</div>
 
       <div id="confirmBanner" class="hidden mb-4 rounded-lg border border-amber-400/40 bg-amber-400/5 p-3 fade-in">
         <div class="flex items-start gap-2.5">
@@ -146,7 +172,6 @@
         </div>
       </div>
 
-      <!-- PLAN PREVIEW -->
       <div id="planCard" class="hidden mb-4 rounded-lg border border-cyan-400/30 bg-cyan-400/5 p-4 fade-in">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
           <div class="hud-title">Plan Preview</div>
@@ -162,30 +187,30 @@
         </div>
       </div>
 
-      <div id="thread" class="panel-scroll h-[22rem] overflow-y-auto space-y-3 pr-2 mb-4"></div>
+      <div id="thread" class="panel-scroll h-[21rem] overflow-y-auto space-y-3 pr-2 mb-4"></div>
 
-      <div class="input-hud rounded-xl flex items-center gap-3 px-4 py-3">
+      <div class="input-hud rounded-xl flex items-center gap-2.5 px-4 py-3">
         <i data-lucide="sparkles" class="w-4 h-4 text-cyan-400 shrink-0"></i>
         <input id="goalInput" type="text" placeholder="What should JARVIS do?" autocomplete="off"
-               class="flex-1 bg-transparent outline-none mono text-sm text-cyan-50 placeholder:text-slate-600">
+               class="flex-1 bg-transparent outline-none mono text-sm text-cyan-50 placeholder:text-slate-600 min-w-0">
         <select id="goalAccount" class="mono text-[.65rem] bg-[#0a1222] border border-slate-700 rounded-md px-2 py-1.5 text-slate-300 outline-none">
           <option value="">AUTO</option>
         </select>
-        <button id="goalPlanBtn" title="Preview plan only" class="btn shrink-0 w-9 h-9 rounded-lg bg-violet-400/15 border border-violet-400/50 text-violet-300 flex items-center justify-center hover:bg-violet-400/25">
-          <i data-lucide="scan-search" class="w-4 h-4"></i>
-        </button>
+        <button id="goalPlanBtn" title="Preview plan (never mutates)" class="btn shrink-0 w-9 h-9 rounded-lg bg-violet-400/15 border border-violet-400/50 text-violet-300 flex items-center justify-center hover:bg-violet-400/25">
+          <i data-lucide="scan-search" class="w-4 h-4"></i></button>
         <button id="goalSend" title="Execute goal" class="btn shrink-0 w-9 h-9 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-300 flex items-center justify-center hover:bg-cyan-400/25">
-          <i data-lucide="send-horizontal" class="w-4 h-4"></i>
-        </button>
+          <i data-lucide="send-horizontal" class="w-4 h-4"></i></button>
       </div>
 
       <div class="flex flex-wrap gap-2 mt-3">
         <span class="chip badge text-slate-400" data-goal="status">status</span>
-        <span class="chip badge text-slate-400" data-goal="mere currently running tasks aur monitors dikhao">running registry</span>
-        <span class="chip badge text-slate-400" data-goal="mere connected account ki information batao">account info</span>
-        <span class="chip badge text-slate-400" data-goal="folders list karo">list folders</span>
-        <span class="chip badge text-slate-400" data-goal="mere main channel pe dhyan rakhna, unknown sender aaye to alert karna">watch main channel</span>
-        <span class="chip badge text-slate-400" data-goal="help">capabilities</span>
+        <span class="chip badge text-slate-400" data-goal="main channel ka latest post dikhao">latest post</span>
+        <span class="chip badge text-slate-400" data-goal="forward latest post to saved messages">latest to saved</span>
+        <span class="chip badge text-slate-400" data-goal="effective running tasks aur monitors dikhao">registry</span>
+        <span class="chip badge text-slate-400" data-goal="folders list karo">folders</span>
+        <span class="chip badge text-slate-400" data-goal="run system diagnostics">diagnostics</span>
+        <span class="chip badge text-slate-400" data-goal="heal the system">heal</span>
+        <span class="chip badge text-slate-400" data-goal="help">help</span>
       </div>
     </div>
 
@@ -198,7 +223,7 @@
           <span id="lastFail" class="text-rose-400/80 truncate max-w-[16rem]">—</span>
         </div>
       </div>
-      <div id="diagLog" class="panel-scroll h-40 overflow-y-auto mono text-[.65rem] leading-relaxed space-y-1 pr-2"></div>
+      <div id="diagLog" class="panel-scroll h-36 overflow-y-auto mono text-[.65rem] leading-relaxed space-y-1 pr-2"></div>
     </div>
   </section>
 
@@ -206,31 +231,78 @@
   <section class="col-span-12 lg:col-span-3 space-y-5">
     <div class="hud-panel p-4">
       <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="list-todo" class="w-3.5 h-3.5"></i>Tasks</div>
-      <div id="tasksList" class="space-y-2.5 panel-scroll max-h-64 overflow-y-auto pr-1"></div>
+      <div id="tasksList" class="space-y-2.5 panel-scroll max-h-56 overflow-y-auto pr-1"></div>
     </div>
     <div class="hud-panel p-4">
       <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="radar" class="w-3.5 h-3.5"></i>Monitors</div>
-      <div id="monitorsList" class="space-y-2.5 panel-scroll max-h-52 overflow-y-auto pr-1"></div>
+      <div id="monitorsList" class="space-y-2.5 panel-scroll max-h-48 overflow-y-auto pr-1"></div>
     </div>
     <div class="hud-panel p-4">
-      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i>Scheduler (KTM)</div>
-      <div id="schedulesList" class="space-y-2.5 panel-scroll max-h-44 overflow-y-auto pr-1"></div>
+      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i>Scheduler</div>
+      <div id="schedulesList" class="space-y-2.5 panel-scroll max-h-40 overflow-y-auto pr-1"></div>
     </div>
   </section>
 </div>
 
-<!-- TOOLBOX -->
-<section class="hud-panel p-5">
+<!-- ════ CHANNELS + FOLDERS ════ -->
+<div class="grid grid-cols-12 gap-5">
+  <section id="sec-channels" class="col-span-12 lg:col-span-6 hud-panel p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="hud-title flex items-center gap-2"><i data-lucide="tv" class="w-3.5 h-3.5"></i>Main Channels</div>
+      <button onclick="poll(true)" class="btn text-[.62rem] mono px-2.5 py-1.5 rounded-md border border-slate-600 text-slate-400 hover:text-slate-200 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH</button>
+    </div>
+    <div id="channelsList" class="space-y-2.5 panel-scroll max-h-80 overflow-y-auto pr-1">
+      <div class="mono text-[.6rem] text-slate-600 text-center py-4">LOADING…</div>
+    </div>
+  </section>
+
+  <section id="sec-folders" class="col-span-12 lg:col-span-6 hud-panel p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="hud-title flex items-center gap-2"><i data-lucide="folder" class="w-3.5 h-3.5"></i>Telegram Folders</div>
+      <button onclick="loadFolders(true)" class="btn text-[.62rem] mono px-2.5 py-1.5 rounded-md border border-slate-600 text-slate-400 hover:text-slate-200 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH</button>
+    </div>
+    <div id="foldersList" class="space-y-2 panel-scroll max-h-40 overflow-y-auto pr-1">
+      <div class="mono text-[.6rem] text-slate-600 text-center py-4">LOADING…</div>
+    </div>
+    <div id="foldersDetail" class="mt-3 mono text-[.62rem] text-slate-400 space-y-1 panel-scroll max-h-40 overflow-y-auto"></div>
+  </section>
+</div>
+
+<!-- ════ AI + HEAL ════ -->
+<div class="grid grid-cols-12 gap-5">
+  <section id="sec-ai" class="col-span-12 lg:col-span-5 hud-panel p-5">
+    <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="cpu" class="w-3.5 h-3.5"></i>AI Provider Layer</div>
+    <div id="aiProviders" class="space-y-2.5"></div>
+    <p class="mono text-[.58rem] text-slate-600 mt-3">Keys are read from environment only and never displayed. AI never executes tools directly — every decision is registry-validated.</p>
+  </section>
+
+  <section id="sec-heal" class="col-span-12 lg:col-span-7 hud-panel p-5">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div class="hud-title flex items-center gap-2"><i data-lucide="heart-pulse" class="w-3.5 h-3.5"></i>Healing Center</div>
+      <div class="flex gap-2">
+        <button id="btnSelftest" class="btn text-[.62rem] mono px-3 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1.5">
+          <i data-lucide="stethoscope" class="w-3 h-3"></i>RUN DIAGNOSTICS</button>
+        <button id="btnHeal" class="btn text-[.62rem] mono px-3 py-1.5 rounded-md border border-emerald-400/40 text-emerald-300 hover:bg-emerald-400/10 flex items-center gap-1.5">
+          <i data-lucide="bandage" class="w-3 h-3"></i>APPLY SAFE HEALING</button>
+      </div>
+    </div>
+    <div id="selftestTable" class="grid sm:grid-cols-2 gap-1.5 mb-3"></div>
+    <div id="healLog" class="mono text-[.62rem] text-slate-400 space-y-1 panel-scroll max-h-44 overflow-y-auto"></div>
+  </section>
+</div>
+
+<!-- ════ TOOLBOX ════ -->
+<section id="sec-tools" class="hud-panel p-5">
   <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
-    <div class="hud-title flex items-center gap-2"><i data-lucide="wrench" class="w-3.5 h-3.5"></i>Tool Registry — internal telegram toolbox</div>
+    <div class="hud-title flex items-center gap-2"><i data-lucide="wrench" class="w-3.5 h-3.5"></i>Tool Registry — discoverable telegram toolbox</div>
     <div class="flex gap-2 items-center flex-wrap">
       <input id="toolFilter" placeholder="filter tools..." class="mono text-[.65rem] bg-[#0a1222] border border-slate-700 rounded-md px-2.5 py-1.5 text-slate-300 outline-none w-44">
       <button id="toolsRefresh" class="btn text-[.65rem] mono px-3 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1.5">
         <i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH TOOLS</button>
     </div>
   </div>
-  <div class="panel-scroll max-h-[26rem] overflow-y-auto">
-    <table class="w-full text-left">
+  <div class="panel-scroll max-h-[24rem] overflow-y-auto overflow-x-auto">
+    <table class="w-full text-left min-w-[60rem]">
       <thead class="sticky top-0 bg-[#0a1120] z-10">
         <tr class="mono text-[.58rem] text-slate-500 tracking-[.15em]">
           <th class="py-2 pr-3">TOOL</th><th class="py-2 pr-3">CATEGORY</th><th class="py-2 pr-3">STATUS</th>
@@ -245,7 +317,7 @@
 </main>
 
 <footer class="relative z-10 text-center mono text-[.6rem] text-slate-600 tracking-[.25em] pb-6">
-  ONE BRAIN · ONE STATE · DISCOVERED TOOLS · NO FAKE SUCCESS
+  ONE BRAIN · ONE STATE · DISCOVERED TOOLS · SAFE HEALING · NO FAKE SUCCESS
 </footer>
 
 <!-- ACCOUNT MODAL -->
@@ -308,10 +380,9 @@
 <div id="toastWrap" class="fixed bottom-5 right-5 z-50 space-y-2 w-80"></div>
 
 <script>
-/* ═══════════ JARVIS v2 WEB CONTROL ═══════════ */
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let STATE = null, BOOTED = false, CONFIRM_ACCOUNT = null, CURRENT_PLAN = null, TOOLS_CACHE = [];
+let STATE = null, BOOTED = false, CONFIRM_ACCOUNT = null, CURRENT_PLAN = null, TOOLS_CACHE = [], FOLDERS_CACHE = [];
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers||{}) }});
@@ -326,10 +397,9 @@ function toast(msg, ok = true) {
   setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity .4s"; setTimeout(()=>el.remove(), 400); }, 4200);
 }
 
-/* ── boot ── */
-const bootLines = ["> json persistence layer ... OK", "> loading NLU feature engine ... OK",
-  "> registry discovery armed ... OK", "> task/monitor/cross engines ... OK", "> folder resolver online ... OK",
-  "> web uplink ..."];
+const bootLines = ["> json persistence ... OK", "> NLU + AI decision layer ... OK",
+  "> tool registry discovery ... OK", "> reply/folder/entity resolvers ... OK",
+  "> task/monitor/cross engines ... OK", "> healing center armed ... OK", "> uplink ..."];
 function runBoot() {
   let i = 0;
   const t = setInterval(() => {
@@ -340,22 +410,43 @@ function runBoot() {
       $("bootBar").style.width = (8 + (i+1)/bootLines.length * 82) + "%";
       i++;
     } else clearInterval(t);
-  }, 230);
+  }, 200);
 }
 
-/* ── render helpers ── */
 const KIND_ICON = { cross:"repeat", monitor:"radar", delete:"trash-2", forward_bulk:"send" };
 function btn(label, icon, cls, onclick) {
   return `<button onclick="${onclick}" class="btn text-[.6rem] mono px-2 py-1 rounded-md border ${cls} flex items-center gap-1"><i data-lucide="${icon}" class="w-3 h-3"></i>${label}</button>`;
 }
 const ACTIVE_STATES = ["RUNNING","MONITORING","PLANNING","WAITING","PAUSED","FAILED","EXPIRED"];
 
+function renderOverview(s) {
+  $("statJarvis").textContent = "ONLINE"; $("statJarvisSub").textContent = "uptime " + fmtDur(s.uptime_sec);
+  const auths = s.accounts.filter(a=>a.authorized).length;
+  $("statTg").textContent = auths ? `${auths} ONLINE` : "OFFLINE";
+  $("statTg").className = "mono text-lg mt-1 " + (auths ? "text-emerald-300" : "text-slate-500");
+  $("statTgSub").textContent = s.telethon ? `${s.accounts.length} account(s)` : "telethon missing";
+  const conf = (s.ai?.providers||[]).filter(p=>p.configured).length;
+  $("statAI").textContent = conf ? `${conf} READY` : "LOCAL NLU";
+  $("statAI").className = "mono text-lg mt-1 " + (conf ? "text-violet-300" : "text-amber-300");
+  $("statAISub").textContent = conf ? `active: ${s.ai.active || "—"}` : "no keys configured";
+  $("statAccounts").textContent = s.accounts.length;
+  $("statAccountsSub").textContent = `${auths} authorized`;
+  const activeTasks = s.tasks.filter(t=>["RUNNING","MONITORING","PLANNING"].includes(t.status)).length;
+  $("statTasks").textContent = activeTasks;
+  $("statMonitors").textContent = s.monitors.length;
+  $("statSchedules").textContent = s.schedules.length;
+  const errs = (s.diag.events||[]).filter(e=>["ERROR","WARN"].includes(e.level)).length;
+  $("statErrors").textContent = errs;
+  $("statErrors").className = "mono text-lg mt-1 " + (errs ? "text-rose-300" : "text-emerald-300");
+  $("statErrorsSub").textContent = s.diag.last_failure ? "see diagnostics" : "none";
+}
+
 function renderAccounts(s) {
   const sel = $("goalAccount"), keep = sel.value;
   sel.innerHTML = `<option value="">AUTO</option>` + s.accounts.map((a, i) =>
     `<option value="${a.account_id}" ${keep===a.account_id?"selected":""}>ACC ${i+1} · ${esc(a.label)}</option>`).join("");
   if (!s.accounts.length) {
-    $("accountsList").innerHTML = `<div class="mono text-[.65rem] text-slate-500 border border-dashed border-slate-700 rounded-lg p-4 text-center leading-relaxed">NO ACCOUNTS YET<br><span class="text-cyan-500/80">add one — web starts without telegram creds</span></div>`;
+    $("accountsList").innerHTML = `<div class="mono text-[.65rem] text-slate-500 border border-dashed border-slate-700 rounded-lg p-4 text-center leading-relaxed">NO ACCOUNTS YET<br><span class="text-cyan-500/80">web starts without telegram creds — add one here</span></div>`;
     return;
   }
   $("accountsList").innerHTML = s.accounts.map((a, i) => {
@@ -367,9 +458,9 @@ function renderAccounts(s) {
         <span class="mono text-xs text-slate-200 flex-1 truncate">${i+1}. ${esc(a.label)}</span>
         <span class="badge ${a.authorized ? "st-RUNNING" : a.connected ? "st-PAUSED" : ""}">${stateTxt}</span>
       </div>
-      <div class="mono text-[.6rem] text-slate-500 mt-1.5 truncate">${esc(a.self_name || a.phone_masked || "—")} ${a.self_username?("@"+esc(a.self_username)):""} · api:${a.api_mode}</div>
+      <div class="mono text-[.6rem] text-slate-500 mt-1.5 truncate">${esc(a.self_name || a.phone_masked || "—")} ${a.self_username?("@"+esc(a.self_username)):""} ${a.self_tg_id?("· "+a.self_tg_id):""} · api:${a.api_mode}</div>
       <div class="flex items-center justify-between mt-2">
-        <span class="mono text-[.6rem] text-cyan-400/70">${a.main_channels.length} main ch · ${a.known_channels} known · ${a.memory_aliases} aliases</span>
+        <span class="mono text-[.6rem] text-cyan-400/70">${a.main_channels.length} main ch · ${a.known_channels} known</span>
         <button onclick="openConfig('${a.account_id}')" class="btn text-[.6rem] mono text-cyan-300/80 hover:text-cyan-200 flex items-center gap-1"><i data-lucide="settings-2" class="w-3 h-3"></i>CONFIG</button>
       </div>
       ${a.last_error ? `<div class="mono text-[.58rem] text-rose-400/70 mt-1 truncate">${esc(a.last_error)}</div>` : ""}
@@ -409,6 +500,7 @@ function renderTasks(s) {
         ${t.end_time ? `<span>ends ${esc(t.end_time.slice(0,14))}</span>` : ""}
       </div>
       ${t.current_action ? `<div class="mono text-[.56rem] text-cyan-400/60 mt-1 truncate">now: ${esc(t.current_action)}</div>` : ""}
+      ${t.next_action ? `<div class="mono text-[.56rem] text-slate-500 mt-0.5 truncate">next: ${esc(t.next_action)}</div>` : ""}
       ${t.last_error ? `<div class="mono text-[.56rem] text-rose-400/70 mt-1 truncate">${esc(t.last_error_code? "["+t.last_error_code+"] ":"")}${esc(t.last_error)}</div>` : ""}
       ${acts ? `<div class="flex gap-1.5 mt-2 flex-wrap">${acts}</div>` : ""}
     </div>`;
@@ -424,7 +516,7 @@ function renderMonitors(s) {
       <span class="badge st-RUNNING">${esc(m.condition)}</span>
     </div>
     <div class="mono text-[.58rem] text-slate-500 mt-1 flex gap-2 flex-wrap">
-      <span>${esc(m.action||"alert_only")}</span><span>hits ${m.hits||0}</span><span>cursor #${m.last_processed_id||0}</span>
+      <span>${esc(m.action||"alert_only")}</span><span>hits ${m.hits||0}</span><span>last #${m.last_processed_id||0}</span>
       <span>until ${esc((m.end_ktm||"").slice(0,17))}</span>
     </div>
     <div class="mt-2">${btn("STOP","square","border-rose-400/30 text-rose-300 hover:bg-rose-400/10",`monStop('${m.monitor_id}')`)}</div>
@@ -441,7 +533,7 @@ function renderSchedules(s) {
 }
 
 function renderDiag(s) {
-  const evs = s.diag.events.slice(-60).reverse();
+  const evs = (s.diag.events||[]).slice(-60).reverse();
   $("diagLog").innerHTML = evs.map(e =>
     `<div class="flex gap-2"><span class="text-slate-600 shrink-0">${esc(e.ts.slice(11,19))}</span>
      <span class="diag-${e.level} shrink-0 w-12">${e.level}</span>
@@ -452,7 +544,101 @@ function renderDiag(s) {
   $("lastFail").textContent = lf ? `ERR ${lf.component}.${lf.operation}` : "ERR —";
   $("persistRow").innerHTML = Object.entries(s.persistence).map(([k,v]) =>
     `<span class="badge ${v?"st-RUNNING":"st-FAILED"}">${k}</span>`).join("");
-  $("limitsRow").textContent = `limits · tasks ${s.limits.tasks} · monitors ${s.limits.monitors} · schedules ${s.limits.schedules} · ctx TTL 30m · confirmations 90s single-use`;
+  $("limitsRow").textContent = `limits · tasks ${s.limits.tasks} · monitors ${s.limits.monitors} · schedules ${s.limits.schedules} · ctx TTL 30m · confirmations 90s`;
+}
+
+function renderChannels(s) {
+  const accs = s.accounts;
+  if (!accs.length) { $("channelsList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-4">NO ACCOUNTS</div>`; return; }
+  const rows = [];
+  accs.forEach((a, ai) => {
+    rows.push(`<div class="mono text-[.58rem] tracking-[.15em] text-cyan-500/70 mt-1">${esc(a.label).toUpperCase()} — ${a.main_channels.length} main channel(s)</div>`);
+    if (!a.main_channels.length) rows.push(`<div class="mono text-[.6rem] text-slate-600">none configured — set via CONFIG or chat</div>`);
+    a.main_channels.forEach(c => {
+      const key = `${a.account_id}:${c.id}`;
+      rows.push(`<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5">
+        <div class="flex items-center gap-2 flex-wrap">
+          <i data-lucide="tv" class="w-3.5 h-3.5 text-cyan-300/70"></i>
+          <span class="mono text-[.65rem] text-slate-200 flex-1 truncate">${esc(c.title||"?")} <span class="text-slate-500">[${c.id}]</span>${c.username?(" @"+esc(c.username)):""}</span>
+          <button onclick="channelLatest('${a.account_id}','${c.id}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">LATEST</button>
+          <button onclick="channelInspect('${a.account_id}','${c.id}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-violet-400/40 text-violet-300 hover:bg-violet-400/10">INSPECT</button>
+        </div>
+        <div id="ch-${cssSafe(key)}" class="mono text-[.58rem] text-slate-500 mt-1 whitespace-pre-wrap"></div>
+      </div>`);
+    });
+  });
+  $("channelsList").innerHTML = rows.join("");
+  lucide.createIcons();
+}
+function cssSafe(s){ return s.replace(/[^a-z0-9]/gi, "_"); }
+
+window.channelLatest = async (aid, ref) => {
+  const el = $("ch-" + cssSafe(`${aid}:${ref}`));
+  if (el) el.textContent = "fetching latest (read-only)…";
+  const r = await api("/api/channels/latest", { method:"POST", body: JSON.stringify({ aid, ref }) });
+  const txt = (r.ok && r.data)
+    ? `#${r.data.message_id} · ${(r.data.date_ktm||"").slice(0,17)}\n"${(r.data.text||"[media]").slice(0,140)}"${r.data.has_media ? " +media" : ""}`
+    : `FAILED [${r.error_code||""}] ${r.error||"error"}`;
+  if (el) el.textContent = txt;
+  if (r.ok) addMsg("jarvis", `LATEST POST [${r.data.entity}]\nMessage #${r.data.message_id} · ${r.data.date_ktm}\n"${r.data.text || "[media]"}"`, "SUCCESS");
+};
+window.channelInspect = async (aid, ref) => {
+  const el = $("ch-" + cssSafe(`${aid}:${ref}`));
+  if (el) el.textContent = "inspecting…";
+  const r = await api("/api/channels/inspect", { method:"POST", body: JSON.stringify({ aid, ref }) });
+  if (el) el.textContent = (r.ok && r.data)
+    ? `${r.data.kind} · members ${r.data.participants ?? "?"} · admin ${r.data.rights?.is_admin ? "yes" : "no/?"} · sampled ${r.data.message_count_sampled}`
+    : `FAILED [${r.error_code||""}] ${r.error||"error"}`;
+};
+
+async function loadFolders(force) {
+  $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-3">loading…</div>`;
+  const r = await api("/api/folders");
+  if (!r.ok) { $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-rose-400/70 text-center py-3">${esc(r.error||"needs authorized account")}</div>`; return; }
+  FOLDERS_CACHE = (r.data?.folders) || [];
+  if (!FOLDERS_CACHE.length) { $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-3">no telegram folders on this account</div>`; return; }
+  $("foldersList").innerHTML = FOLDERS_CACHE.map(f =>
+    `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5 flex items-center gap-2 fade-in">
+      <i data-lucide="folder" class="w-3.5 h-3.5 text-amber-300/80"></i>
+      <span class="mono text-[.65rem] text-slate-200 flex-1 truncate">${esc(f.title)} <span class="text-slate-500">(${f.peer_count} chats)</span></span>
+      <button onclick="folderInspect(decodeURIComponent('${encodeURIComponent(f.title)}'))" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-amber-400/40 text-amber-300 hover:bg-amber-400/10">INSPECT</button>
+    </div>`).join("");
+  lucide.createIcons();
+}
+window.folderInspect = async (name) => {
+  $("foldersDetail").innerHTML = `<div class="text-slate-600">resolving real folder peers…</div>`;
+  const r = await api("/api/folders/inspect", { method:"POST", body: JSON.stringify({ name }) });
+  if (!r.ok) { $("foldersDetail").innerHTML = `<div class="text-rose-400/80">[${esc(r.error_code||"")}] ${esc(r.error||"failed")}</div>`; return; }
+  const d = r.data, lines = [`FOLDER '${d.title}' — ${d.total_peers} chat(s), no substitutions`];
+  (d.channels||[]).forEach(c => lines.push(`  [channel] ${c.title} [${c.id}]${c.username?(" @"+c.username):""}`));
+  (d.groups||[]).forEach(g => lines.push(`  [group] ${g.title} [${g.id}]`));
+  (d.users||[]).forEach(u => lines.push(`  [user] ${u.title} [${u.id}]`));
+  (d.unresolved||[]).forEach(u => lines.push(`  [unresolved] ${u.id}`));
+  $("foldersDetail").innerHTML = lines.map(l => `<div>${esc(l)}</div>`).join("");
+};
+
+function renderAI(s) {
+  const ai = s.ai;
+  if (!ai || !(ai.providers||[]).length) {
+    $("aiProviders").innerHTML = `<div class="mono text-[.62rem] text-slate-600 text-center py-4">NO PROVIDERS IN ORDER LIST</div>`;
+    return;
+  }
+  $("aiProviders").innerHTML = ai.providers.map(p => {
+    const st = p.configured ? (p.active ? "RUNNING" : "WAITING") : "STOPPED";
+    const stTxt = p.configured ? (p.active ? "ACTIVE" : "CONFIGURED") : "NOT CONFIGURED";
+    return `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-3 fade-in">
+      <div class="flex items-center gap-2">
+        <span class="dot ${p.configured ? "on" : "off"}"></span>
+        <span class="mono text-xs text-slate-200 flex-1">${esc(p.name)}</span>
+        <span class="badge st-${st}">${stTxt}</span>
+      </div>
+      <div class="mono text-[.58rem] text-slate-500 mt-1.5 space-y-0.5">
+        <div>model: ${esc(p.model || "not set")}</div>
+        ${p.last_success ? `<div>last success: ${esc(p.last_success.slice(5,19))}</div>` : ""}
+        ${p.last_error ? `<div class="text-rose-400/70 truncate" title="${esc(p.last_error)}">last error: ${esc(p.last_error)}</div>` : ""}
+      </div>
+    </div>`;
+  }).join("");
 }
 
 function renderConfirm(s) {
@@ -466,16 +652,17 @@ function renderConfirm(s) {
 
 function renderAll(s) {
   STATE = s;
-  renderAccounts(s); renderTasks(s); renderMonitors(s); renderSchedules(s); renderDiag(s); renderConfirm(s);
+  renderOverview(s); renderAccounts(s); renderTasks(s); renderMonitors(s);
+  renderSchedules(s); renderDiag(s); renderConfirm(s); renderChannels(s); renderAI(s);
   $("uptime").textContent = fmtDur(s.uptime_sec);
   $("pillTelethon").innerHTML = `<span class="dot ${s.telethon?"on":"off"}"></span>TELETHON`;
-  $("pillAI").innerHTML = `<span class="dot ${s.ai_available?"on":"on"}"></span>NLU ${s.ai_available?"+AI":"LOCAL"}`;
+  $("pillAI").innerHTML = `<span class="dot ${s.ai?.any_configured?"on":"warn"}"></span>AI ${s.ai?.active || "LOCAL"}`;
   $("pillTools").textContent = `TOOLS ${s.tools_summary.enabled}/${s.tools_summary.total}`;
   lucide.createIcons();
 }
 function fmtDur(sec){ sec=Math.floor(sec); if(sec<60)return sec+"s"; if(sec<3600)return Math.floor(sec/60)+"m"; if(sec<86400)return Math.floor(sec/3600)+"h"; return Math.floor(sec/86400)+"d"; }
 
-/* ── toolbox ── */
+/* toolbox */
 async function loadTools() {
   const r = await api("/api/tools");
   if (!r.ok) return;
@@ -490,8 +677,8 @@ function toolFlags(t) {
   if (t.supports_background_task) f.push(`<span class="badge text-emerald-300 border-emerald-400/30">BG</span>`);
   return f.join(" ");
 }
-function renderTools(filter="") {
-  const fl = (filter ?? $("toolFilter").value ?? "").toLowerCase();
+function renderTools() {
+  const fl = ($("toolFilter").value || "").toLowerCase();
   const tools = TOOLS_CACHE.filter(t => !fl || t.name.includes(fl) || t.category.includes(fl) || t.description.toLowerCase().includes(fl));
   $("toolboxBody").innerHTML = tools.map(t => `<tr class="tool-row border-t border-slate-800/60">
     <td class="py-2 pr-3 text-cyan-200">${esc(t.name)}</td>
@@ -503,13 +690,13 @@ function renderTools(filter="") {
     <td class="py-2 pr-3 text-slate-500">${t.last_used?esc(t.last_used.slice(5,19)):"never"} <span class="text-slate-700">(${t.use_count}x)</span></td>
     <td class="py-2 pr-3 text-rose-400/70 max-w-[10rem]"><span class="block truncate" title="${esc(t.last_error||"")}">${esc(t.last_error||"—")}</span></td>
     <td class="py-2 pr-3"><div class="flex gap-2 justify-end items-center">
-      ${t.testable?`<button onclick="toolTest('${t.name}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">TEST</button>`:""}
-      <div class="switch ${t.enabled?"on":""}" onclick="toolToggle('${t.name}', ${!t.enabled})" title="enable/disable"></div>
+      ${t.testable?`<button onclick="toolTest('${t.name}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">TEST</button>`:`<span class="badge text-slate-600" title="destructive/write tools are confirmed, never free-tested">LOCKED</span>`}
+      <div class="switch ${t.enabled?"on":""}" onclick="toolToggle('${t.name}', ${!t.enabled})"></div>
     </div></td>
   </tr>`).join("");
   lucide.createIcons();
 }
-$("toolFilter").addEventListener("input", () => renderTools());
+$("toolFilter").addEventListener("input", renderTools);
 $("toolsRefresh").onclick = async () => { await api("/api/tools/refresh", {method:"POST"}); await loadTools(); toast("tool registry refreshed"); };
 window.toolToggle = async (name, enabled) => {
   const r = await api(`/api/tools/${name}/toggle`, {method:"POST", body: JSON.stringify({enabled})});
@@ -523,8 +710,32 @@ window.toolTest = async (name) => {
   loadTools();
 };
 
-/* ── polling ── */
-async function poll() {
+/* heal */
+$("btnSelftest").onclick = async () => {
+  $("healLog").innerHTML = `<div class="text-slate-600">running offline diagnostics suite…</div>`;
+  const r = await api("/api/selftest", { method:"POST" });
+  if (!r.results) { $("healLog").innerHTML = `<div class="text-rose-400/80">selftest unavailable</div>`; return; }
+  $("selftestTable").innerHTML = r.results.map(x =>
+    `<div class="rounded-md border ${x.pass?"border-emerald-400/25 bg-emerald-400/5":"border-rose-400/25 bg-rose-400/5"} p-2">
+      <div class="flex items-center gap-2"><span class="badge st-${x.pass?"PASS":"FAIL"}">${x.pass?"PASS":"FAIL"}</span>
+      <span class="mono text-[.62rem] text-slate-200 flex-1 truncate">${esc(x.name)}</span></div>
+      ${x.detail?`<div class="mono text-[.55rem] text-slate-500 mt-1 truncate" title="${esc(x.detail)}">${esc(x.detail)}</div>`:""}
+    </div>`).join("");
+  $("healLog").innerHTML = `<div class="diag-${r.ok?"SUCCESS":"ERROR"}">SELFTEST: ${r.pass} passed, ${r.fail} failed of ${r.total}</div>`;
+  lucide.createIcons();
+};
+$("btnHeal").onclick = async () => {
+  $("healLog").innerHTML = `<div class="text-slate-600">applying safe predefined repairs…</div>`;
+  const r = await api("/api/heal", { method:"POST" });
+  if (!r.ok) { $("healLog").innerHTML = `<div class="text-rose-400/80">[${esc(r.error_code||"")}] ${esc(r.error||"heal failed")}</div>`; return; }
+  const ops = (r.data?.ops)||[];
+  $("healLog").innerHTML = ops.map(o => `<div><span class="text-cyan-400/70">heal.${esc(o.op)}</span> — ${esc(o.detail)}</div>`).join("")
+    + `<div class="text-emerald-400/80 mt-1">healing complete · ${ops.length} operations · no secrets touched</div>`;
+  poll(true);
+};
+
+/* polling */
+async function poll(force) {
   try {
     const s = await api("/api/status");
     if (s.ok) {
@@ -532,15 +743,15 @@ async function poll() {
       if (!BOOTED) {
         BOOTED = true;
         $("bootBar").style.width = "100%";
-        setTimeout(() => { $("boot").style.opacity = "0"; setTimeout(()=>$("boot").remove(), 900); }, 400);
-        addMsg("jarvis", "YES SIR. Web Control online.\nGoal-driven Mini Brain armed:-understanding, context, entity resolution, tool discovery, planning, validation, verified execution.", "SUCCESS");
-        loadTools();
-      }
+        setTimeout(() => { $("boot").style.opacity = "0"; setTimeout(()=>$("boot").remove(), 800); }, 350);
+        addMsg("jarvis", "YES SIR. Production systems online.\nVerified AI brain + toolbox + healing center armed. Describe goals naturally — preview plans before executing.", "SUCCESS");
+        loadTools(); loadFolders();
+      } else if (force) { loadFolders(); }
     }
   } catch {}
 }
 
-/* ── console ── */
+/* console */
 function addMsg(who, text, status) {
   const el = document.createElement("div");
   el.className = `fade-in rounded-lg p-3 ${who==="user" ? "msg-user bg-violet-400/5" : "msg-jarvis bg-cyan-400/5"}`;
@@ -550,15 +761,14 @@ function addMsg(who, text, status) {
     <div class="mono text-[.7rem] leading-relaxed text-slate-300 whitespace-pre-wrap">${esc(text)}</div>`;
   $("thread").appendChild(el);
   $("thread").scrollTop = $("thread").scrollHeight;
-  while ($("thread").children.length > 70) $("thread").firstChild.remove();
+  while ($("thread").children.length > 80) $("thread").firstChild.remove();
 }
-
 async function sendGoal(planOnly) {
   const text = $("goalInput").value.trim();
   if (!text) return;
   $("goalInput").value = "";
   addMsg("user", text + (planOnly ? "  [plan preview]" : ""));
-  addMsg("jarvis", planOnly ? "parsing intent → context → entity resolution → planning ..." : "understanding → planning → executing ...", "WAITING");
+  addMsg("jarvis", planOnly ? "intent → context → entities → plan (no mutation)..." : "understanding → planning → verified execution...", "WAITING");
   const res = await api("/api/goal", { method: "POST",
     body: JSON.stringify({ text, plan_only: planOnly, account_id: $("goalAccount").value || undefined }) });
   $("thread").lastChild.remove();
@@ -566,13 +776,13 @@ async function sendGoal(planOnly) {
   addMsg("jarvis", res.reply || res.error || "no reply", res.status || (res.ok ? "SUCCESS" : "FAILED"));
   poll();
 }
-
 function showPlan(res) {
   CURRENT_PLAN = res.plan;
   const p = res.plan;
   $("planCard").classList.remove("hidden");
   $("planBadges").innerHTML =
     `<span class="badge st-PLANNING">${esc(p.intent)}</span>
+     <span class="badge st-${p.mode||"READ"}">MODE ${esc(p.mode||"READ")}</span>
      <span class="badge ${p.risk==="high"?"st-FAILED":p.risk==="medium"?"st-PAUSED":"st-RUNNING"}">RISK ${String(p.risk||"low").toUpperCase()}</span>
      ${p.confirmation_required?`<span class="badge text-amber-300 border-amber-400/40">CONFIRM REQUIRED</span>`:""}
      ${p.report_only?`<span class="badge st-WAITING">REPORT ONLY</span>`:""}`;
@@ -580,7 +790,8 @@ function showPlan(res) {
   $("planEntities").textContent = (p.entities||[]).length ? "Entities: " + p.entities.join(" | ") : "";
   $("planSteps").innerHTML = (p.steps||[]).map((s,i) =>
     `<div class="mono text-[.64rem] text-slate-300 flex gap-2"><span class="text-cyan-500">${i+1}.</span>
-     <span class="text-cyan-200">${esc(s.tool)}</span><span class="text-slate-500">${esc(s.note)}</span></div>`).join("")
+     <span class="text-cyan-200">${esc(s.tool)}</span><span class="text-slate-500">${esc(s.note)}</span>
+     ${s.depends_on&&s.depends_on.length?`<span class="text-violet-400/70">↳ needs step ${s.depends_on.map(d=>d+1).join(",")}</span>`:""}</div>`).join("")
     + (p.missing&&p.missing.length?`<div class="mono text-[.62rem] text-amber-300 mt-1">missing: ${esc(p.missing.join("; "))}</div>`:"");
   lucide.createIcons();
   addMsg("jarvis", res.reply, "WAITING");
@@ -598,7 +809,7 @@ $("planExecute").onclick = async () => {
 };
 $("planDiscard").onclick = () => { $("planCard").classList.add("hidden"); CURRENT_PLAN = null; };
 
-/* ── controls ── */
+/* controls */
 window.taskAction = async (tid, action) => {
   const r = await api(`/api/tasks/${tid}/action`, { method:"POST", body: JSON.stringify({ action }) });
   toast(r.ok ? `task ${action} ok` : (r.error || "failed"), !!r.ok); poll();
@@ -609,11 +820,10 @@ window.accConnect = async (aid) => { const r = await api(`/api/accounts/${aid}/c
 window.accDisconnect = async (aid) => { await api(`/api/accounts/${aid}/disconnect`, { method:"POST" }); toast("disconnected"); poll(); };
 window.accDelete = async (aid) => { if (!confirm("Delete this account and its session?")) return; await api(`/api/accounts/${aid}`, { method:"DELETE" }); toast("account removed"); poll(); };
 window.openLogin = (aid) => { openAccModal("login"); $("loginAccount").value = aid; $("sessionAccount").value = aid; };
-
 $("confirmYes").onclick = async () => { if (!CONFIRM_ACCOUNT) return; const r = await api("/api/confirm", { method:"POST", body: JSON.stringify({ account_id: CONFIRM_ACCOUNT, answer: "yes" }) }); addMsg("jarvis", r.reply || "executed", r.status || "SUCCESS"); poll(); };
 $("confirmNo").onclick = async () => { if (!CONFIRM_ACCOUNT) return; await api("/api/confirm", { method:"POST", body: JSON.stringify({ account_id: CONFIRM_ACCOUNT, answer: "no" }) }); addMsg("jarvis","Aborted. Nothing was executed.","WAITING"); poll(); };
 
-/* ── account modal ── */
+/* account modal */
 function openAccModal(tab = "creds") {
   $("accountModal").classList.remove("hidden");
   const opts = (STATE?.accounts||[]).map((a,i)=>`<option value="${a.account_id}">${i+1}. ${esc(a.label)}</option>`).join("");
@@ -654,7 +864,7 @@ $("sessionImport").onclick = async () => {
   poll();
 };
 
-/* ── config modal ── */
+/* config modal */
 let CONFIG_AID = null;
 window.openConfig = (aid) => {
   CONFIG_AID = aid;
@@ -676,14 +886,13 @@ $("configSave").onclick = async () => {
   } else toast(r.error || "failed", false);
 };
 
-/* ── wiring ── */
+/* wiring */
 $("goalSend").onclick = () => sendGoal(false);
 $("goalPlanBtn").onclick = () => sendGoal(true);
 $("goalInput").addEventListener("keydown", e => { if (e.key === "Enter") sendGoal(false); });
 document.querySelectorAll(".chip").forEach(c => c.onclick = () => { $("goalInput").value = c.dataset.goal; sendGoal(false); });
 setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("en-GB"); }, 1000);
 
-/* starfield */
 (function stars(){
   const c = $("stars"), ctx = c.getContext("2d");
   let W, H, pts;
