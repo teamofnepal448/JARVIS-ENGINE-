@@ -1,914 +1,2126 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DEVIL JARVIS — Production Control Center</title>
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-<script src="https://unpkg.com/lucide@latest"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#02050d" />
+<title>DEVIL JARVIS — Telegram AI Control System</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%2322d3ee' stroke-width='4' stroke-dasharray='20 120'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23f43f5e' stroke-width='3' stroke-dasharray='12 90'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%2322d3ee'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
 <style>
-  html { color-scheme: dark; }
-  body { font-family: 'Space Grotesk', sans-serif; background: #04060c; }
-  .mono { font-family: 'JetBrains Mono', monospace; }
-  .hud-panel {
-    background: linear-gradient(160deg, rgba(13,20,36,.82), rgba(6,10,20,.88));
-    border: 1px solid rgba(56,189,248,.14);
-    box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 18px 50px -20px rgba(0,0,0,.8), inset 0 1px 0 rgba(148,197,255,.06);
-    backdrop-filter: blur(10px); border-radius: 1rem;
-  }
-  .hud-title { letter-spacing: .22em; font-size: .68rem; color: #7dd3fc; text-transform: uppercase; }
-  .scanline::after { content:""; position:fixed; inset:0; pointer-events:none; z-index:40;
-    background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px); mix-blend-mode: overlay; }
-  .glow-text { text-shadow: 0 0 18px rgba(56,189,248,.55), 0 0 60px rgba(56,189,248,.25); }
-  .dot { width:.55rem; height:.55rem; border-radius:9999px; display:inline-block; }
-  .dot.on { background:#34d399; box-shadow:0 0 10px #34d399; animation:pulse 2.2s infinite; }
-  .dot.warn { background:#fbbf24; box-shadow:0 0 10px #fbbf24; animation:pulse 2.2s infinite; }
-  .dot.off { background:#475569; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-  .panel-scroll::-webkit-scrollbar { width:6px; height:6px; }
-  .panel-scroll::-webkit-scrollbar-thumb { background:rgba(56,189,248,.25); border-radius:99px; }
-  .badge { font-family:'JetBrains Mono'; font-size:.6rem; padding:.15rem .45rem; border-radius:.4rem;
-           border:1px solid rgba(148,163,184,.25); letter-spacing:.06em; white-space:nowrap; }
-  .st-RUNNING,.st-ACTIVE,.st-MONITORING,.st-ok,.st-PASS { color:#34d399; border-color:rgba(52,211,153,.4); background:rgba(52,211,153,.08); }
-  .st-PAUSED,.st-WARN { color:#fbbf24; border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
-  .st-FAILED,.st-EXPIRED,.st-degraded,.st-FAIL { color:#f87171; border-color:rgba(248,113,113,.4); background:rgba(248,113,113,.08); }
-  .st-WAITING,.st-PENDING,.st-PLANNING,.st-READ,.st-PLAN { color:#7dd3fc; border-color:rgba(125,211,252,.4); background:rgba(125,211,252,.08); }
-  .st-COMPLETED,.st-SUCCESS,.st-DONE,.st-EXECUTE { color:#a7f3d0; border-color:rgba(167,243,208,.35); background:rgba(167,243,208,.06); }
-  .st-STOPPED,.st-CANCELLED { color:#94a3b8; }
-  .btn { transition:all .18s ease; } .btn:hover { transform:translateY(-1px); }
-  .input-hud { background:rgba(2,6,17,.75); border:1px solid rgba(56,189,248,.25); box-shadow:inset 0 0 20px rgba(2,8,20,.9); }
-  .input-hud:focus-within { border-color:rgba(56,189,248,.6); box-shadow:0 0 0 1px rgba(56,189,248,.35), inset 0 0 20px rgba(2,8,20,.9); }
-  .msg-jarvis { border-left:2px solid rgba(56,189,248,.6); }
-  .msg-user { border-left:2px solid rgba(167,139,250,.55); }
-  .diag-ERROR { color:#fca5a5; } .diag-WARN { color:#fcd34d; } .diag-SUCCESS { color:#6ee7b7; } .diag-INFO { color:#93c5fd; }
-  #boot { transition:opacity .9s ease; }
-  .chip { transition:all .16s ease; cursor:pointer; }
-  .chip:hover { border-color:rgba(56,189,248,.7); color:#bae6fd; background:rgba(56,189,248,.08); }
-  .fade-in { animation:fadein .35s ease both; }
-  @keyframes fadein { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
-  .bar-anim { transition:width .3s ease; }
-  .tool-row:hover { background:rgba(56,189,248,.05); }
-  .switch { position:relative; width:30px; height:16px; border-radius:99px; background:#1e293b; border:1px solid rgba(148,163,184,.3); cursor:pointer; transition:all .2s; }
-  .switch.on { background:rgba(52,211,153,.25); border-color:rgba(52,211,153,.6); }
-  .switch::after { content:""; position:absolute; top:2px; left:2px; width:10px; height:10px; border-radius:99px; background:#94a3b8; transition:all .2s; }
-  .switch.on::after { left:16px; background:#34d399; box-shadow:0 0 8px #34d399; }
-  .stat-card { position:relative; overflow:hidden; }
-  .stat-card::before { content:""; position:absolute; inset:0; background:linear-gradient(120deg, rgba(56,189,248,.08), transparent 55%); pointer-events:none; }
-  .skeleton { animation:sk 1.2s ease-in-out infinite alternate; background:rgba(148,163,184,.12); border-radius:.4rem; }
-  @keyframes sk { from{opacity:.4} to{opacity:.9} }
+:root{
+  --cy:#22d3ee; --cy-dim:#0e7490; --red:#f43f5e; --ok:#34d399; --warn:#fbbf24;
+  --bg:#02050d; --panel:#050b18; --tx:#cbd5e1; --dim:#64748b; --mono:'JetBrains Mono',monospace;
+  --disp:'Orbitron',sans-serif; --sans:'Rajdhani',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:15px;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::selection{background:rgba(34,211,238,.35);color:#fff}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:rgba(255,255,255,.02)}
+::-webkit-scrollbar-thumb{background:rgba(34,211,238,.22);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:rgba(34,211,238,.45)}
+button{font-family:inherit;cursor:pointer}
+input{font-family:var(--mono)}
+.hidden{display:none!important}
+
+/* ---------- backdrop ---------- */
+.bgfx{position:fixed;inset:0;z-index:0;pointer-events:none}
+.grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(56,189,248,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(56,189,248,.045) 1px,transparent 1px);background-size:44px 44px;mask-image:radial-gradient(ellipse 90% 70% at 50% 30%,#000 30%,transparent 100%);-webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 30%,#000 30%,transparent 100%)}
+.glow-a{position:absolute;inset:0;background:radial-gradient(ellipse 60% 45% at 50% 0%,rgba(8,90,130,.28),transparent 65%)}
+.glow-b{position:absolute;inset:0;background:radial-gradient(ellipse 45% 35% at 88% 100%,rgba(140,20,45,.16),transparent 70%)}
+.scanlines{position:absolute;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.016) 0 1px,transparent 1px 3px);opacity:.5}
+.beam{position:absolute;left:0;right:0;height:90px;background:linear-gradient(180deg,transparent,rgba(34,211,238,.05),transparent);animation:beam 10s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes beam{0%{transform:translateY(-30%);opacity:0}12%{opacity:1}60%{opacity:.7}100%{transform:translateY(110vh);opacity:0}}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse 90% 85% at 50% 50%,transparent 55%,rgba(1,3,8,.8) 100%)}
+#stars{position:absolute;inset:0}
+
+/* ---------- boot ---------- */
+#boot{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);transition:opacity .5s}
+#boot.fade{opacity:0;pointer-events:none}
+.boot-title{font-family:var(--disp);font-size:clamp(20px,4vw,30px);font-weight:900;letter-spacing:.35em}
+.tx-red{color:var(--red);text-shadow:0 0 18px rgba(244,63,94,.8)}
+.tx-cy{color:#67e8f9;text-shadow:0 0 18px rgba(34,211,238,.8)}
+.boot-sub{margin-top:8px;font-size:10px;font-weight:700;letter-spacing:.5em;color:var(--dim);text-transform:uppercase}
+#boot-lines{margin-top:26px;height:110px;width:min(92vw,400px);overflow:hidden;font-family:var(--mono);font-size:10px;line-height:1.9;color:rgba(34,211,238,.7)}
+#boot-lines p:last-child{color:#a5f3fc}
+#boot-bar-wrap{margin-top:14px;width:min(92vw,400px);height:3px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden}
+#boot-bar{height:100%;width:0;background:linear-gradient(90deg,var(--cy-dim),var(--cy),var(--red));box-shadow:0 0 12px rgba(34,211,238,.7);transition:width .15s}
+
+/* ---------- reactor ---------- */
+.reactor{position:relative}
+.spin-a{animation:spin 12s linear infinite;transform-origin:50% 50%}
+.spin-b{animation:spin 6s linear infinite reverse;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- header ---------- */
+header.top{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(34,211,238,.1);background:rgba(2,6,16,.86);backdrop-filter:blur(14px)}
+.top-row{max-width:1700px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 12px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand h1{font-family:var(--disp);font-size:19px;font-weight:900;letter-spacing:.22em}
+.brand small{display:block;margin-top:2px;font-size:8px;font-weight:700;letter-spacing:.42em;color:var(--dim);text-transform:uppercase}
+.pills{display:flex;flex:1;flex-wrap:wrap;gap:6px;justify-content:center}
+.pill{display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.03);border-radius:3px;padding:4px 10px}
+.pill .k{font-size:9px;font-weight:700;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+.pill .v{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em}
+.dot{position:relative;display:inline-flex;width:7px;height:7px;flex:none}
+.dot::before{content:'';position:absolute;inset:0;border-radius:99px;opacity:.6;animation:ping 1.6s ease-out infinite}
+.dot::after{content:'';position:absolute;inset:0;border-radius:99px}
+@keyframes ping{0%{transform:scale(1);opacity:.6}80%,100%{transform:scale(2.4);opacity:0}}
+.dot.ok::before,.dot.ok::after{background:var(--ok)} .dot.warn::before,.dot.warn::after{background:var(--warn)}
+.dot.err::before,.dot.err::after{background:var(--red)} .dot.info::before,.dot.info::after{background:var(--cy)}
+.dot.dim::before,.dot.dim::after{background:#475569} .dot.dim::before{animation:none}
+.v.ok{color:var(--ok)} .v.warn{color:var(--warn)} .v.err{color:var(--red)} .v.info{color:#67e8f9} .v.dim{color:#475569}
+.clock{font-family:var(--mono);font-size:11px;color:#a5f3fc;display:flex;align-items:center;gap:7px;letter-spacing:.12em}
+.clock span{font-size:8px;color:var(--dim);letter-spacing:.3em}
+.iconbtn{display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:var(--tx);padding:6px 12px;border-radius:3px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;transition:all .2s}
+.iconbtn:hover{border-color:rgba(34,211,238,.5);color:#a5f3fc}
+
+/* ticker */
+.ticker-wrap{overflow:hidden;border-top:1px solid rgba(34,211,238,.07);background:rgba(0,0,0,.3)}
+#ticker{display:flex;width:max-content;align-items:center;gap:34px;padding:6px 16px;animation:tick 40s linear infinite;will-change:transform}
+@keyframes tick{to{transform:translateX(-50%)}}
+#ticker b{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:#3f5468;font-weight:400}
+#ticker span{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;font-weight:700}
+
+/* ---------- layout ---------- */
+main{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:16px 12px}
+.cols{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:1024px){.cols{grid-template-columns:300px 1fr 330px}}
+@media(min-width:1500px){.cols{grid-template-columns:310px 1fr 350px}}
+.stack{display:flex;flex-direction:column;gap:14px;min-width:0}
+.row2{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:1024px){.row2{grid-template-columns:340px 300px 1fr}}
+footer{position:relative;z-index:10;max-width:1700px;margin:0 auto;padding:0 12px 22px}
+
+/* ---------- HUD panel ---------- */
+.panel{position:relative;border:1px solid rgba(34,211,238,.1);border-radius:4px;background:linear-gradient(160deg,rgba(13,33,54,.5),rgba(3,8,18,.85) 55%),rgba(3,9,20,.72);backdrop-filter:blur(12px);box-shadow:inset 0 1px 0 rgba(148,233,255,.06),0 18px 50px -30px rgba(0,0,0,.9);transition:border-color .3s}
+.panel:hover{border-color:rgba(34,211,238,.22)}
+.corner{position:absolute;width:10px;height:10px;border:1.5px solid rgba(34,211,238,.55);pointer-events:none;transition:all .3s}
+.panel:hover .corner{width:14px;height:14px;border-color:rgba(103,232,249,.95);filter:drop-shadow(0 0 5px rgba(34,211,238,.8))}
+.c-tl{top:0;left:0;border-right:0;border-bottom:0}.c-tr{top:0;right:0;border-left:0;border-bottom:0}
+.c-bl{bottom:0;left:0;border-right:0;border-top:0}.c-br{bottom:0;right:0;border-left:0;border-top:0}
+.p-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(34,211,238,.08);padding:10px 14px}
+.p-head h2{display:flex;align-items:center;gap:9px;font-size:10px;font-weight:700;letter-spacing:.28em;text-transform:uppercase;color:rgba(165,243,252,.8)}
+.p-head h2 svg{color:rgba(34,211,238,.8)}
+.p-head .meta{font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+.p-body{padding:13px 14px;position:relative}
+
+/* ---------- controls ---------- */
+.field{display:block;margin-bottom:10px}
+.field>span{display:flex;justify-content:space-between;margin-bottom:5px}
+.field .lb{font-size:9px;font-weight:700;letter-spacing:.25em;color:var(--dim);text-transform:uppercase}
+.field .hint{font-family:var(--mono);font-size:9px;color:rgba(34,211,238,.5)}
+.field input{width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:10px 12px;font-size:12px;color:#cffafe;outline:none;transition:all .2s}
+.field input::placeholder{color:#334155}
+.field input:focus{border-color:rgba(34,211,238,.7);background:rgba(34,211,238,.04);box-shadow:0 0 20px -6px rgba(34,211,238,.5)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;border:1px solid rgba(34,211,238,.4);background:rgba(34,211,238,.1);color:#a5f3fc;border-radius:3px;padding:10px 14px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;transition:all .2s}
+.btn:hover:not(:disabled){border-color:rgba(103,232,249,.8);background:rgba(34,211,238,.2);box-shadow:0 0 25px -6px rgba(34,211,238,.7)}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn:disabled{cursor:not-allowed;opacity:.4}
+.btn.danger{border-color:rgba(244,63,94,.4);background:rgba(244,63,94,.1);color:#fecdd3}
+.btn.danger:hover:not(:disabled){border-color:rgba(251,113,133,.8);background:rgba(244,63,94,.2);box-shadow:0 0 25px -6px rgba(244,63,94,.7)}
+.btn.ghost{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.03);color:#cbd5e1}
+.btn.ghost:hover:not(:disabled){border-color:rgba(255,255,255,.25);background:rgba(255,255,255,.07)}
+.btn.sm{width:auto;padding:7px 12px;font-size:10px}
+.err-box{border:1px solid rgba(244,63,94,.35);background:rgba(244,63,94,.09);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#fda4af}
+.ok-box{border:1px solid rgba(52,211,153,.35);background:rgba(52,211,153,.08);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#6ee7b7}
+.warn-box{border:1px solid rgba(251,191,36,.35);background:rgba(251,191,36,.09);border-radius:3px;padding:9px 11px;font-family:var(--mono);font-size:10px;line-height:1.6;color:#fcd34d}
+.note{font-family:var(--mono);font-size:9px;line-height:1.6;color:#475569}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(34,211,238,.25);border-top-color:var(--cy);border-radius:99px;animation:spin .8s linear infinite}
+.step-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;color:#67e8f9;margin-top:8px}
+.step-line .dot{flex:none}
+
+/* tabs */
+.tabs{display:flex;gap:4px;margin-bottom:12px}
+.tab{flex:1;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);color:var(--dim);padding:7px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;border-radius:3px;transition:all .2s}
+.tab.on{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.1);color:#a5f3fc}
+
+/* account / rows */
+.acct-box{border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.04);border-radius:3px;padding:11px;font-family:var(--mono);font-size:10.5px}
+.acct-box .ttl{font-size:8.5px;font-weight:700;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
+.kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.kv b{color:#f1f5f9;font-weight:500}
+.kv .acc{color:#a5f3fc;font-weight:700}
+.kv span{color:var(--dim)}
+.chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:rgba(110,231,183,.9);padding:2px 0}
+.avatar{display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:99px;border:1px solid rgba(34,211,238,.4);background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(244,63,94,.2));font-family:var(--disp);font-weight:900;font-size:14px;color:#a5f3fc;flex:none}
+
+/* session reveal */
+.reveal{border:1px solid rgba(251,191,36,.4);background:rgba(251,191,36,.06);border-radius:3px;padding:11px;margin-top:10px}
+.reveal textarea{width:100%;height:64px;resize:none;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.1);border-radius:3px;color:#fcd34d;font-family:var(--mono);font-size:10px;padding:8px;outline:none}
+
+/* ---------- console ---------- */
+#term{height:400px;overflow-y:auto;border:1px solid rgba(34,211,238,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:12px;font-family:var(--mono);font-size:11px;line-height:1.6}
+@media(min-width:1024px){#term{height:450px}}
+#term p{white-space:pre-wrap;word-break:break-word}
+.t-user{margin-top:8px;font-weight:700;color:#67e8f9}
+.t-user::before{content:'❯ ';color:var(--red)}
+.t-jarvis{color:#cbd5e1}.t-jarvis::before{content:'│ ';color:#164e63}
+.t-sys{color:#475569}.t-err{color:#f87171}.t-ok{color:#6ee7b7}
+.caretline{color:rgba(34,211,238,.7)}.caretline::before{content:'❯ ';color:var(--red)}
+.caret{display:inline-block;width:7px;height:13px;background:rgba(103,232,249,.9);vertical-align:-2px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{55%{opacity:1}56%,100%{opacity:0}}
+.typing{display:inline-flex;gap:3px;vertical-align:-2px}.typing i{width:4px;height:4px;border-radius:99px;background:rgba(34,211,238,.9);animation:ty 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.18s}.typing i:nth-child(3){animation-delay:.36s}
+@keyframes ty{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.05);color:rgba(103,232,249,.8);border-radius:3px;padding:5px 10px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;transition:all .2s}
+.chip:hover:not(:disabled){border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.15);color:#fff}
+.chip:disabled{opacity:.3;cursor:not-allowed}
+.cmd-row{display:flex;gap:8px}
+.cmd-row .inwrap{position:relative;flex:1}
+.cmd-row .inwrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--red)}
+#cmd-input{width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:11px 12px 11px 32px;font-size:12px;color:#cffafe;outline:none;transition:all .2s}
+#cmd-input:focus{border-color:rgba(34,211,238,.6);box-shadow:0 0 22px -6px rgba(34,211,238,.5)}
+#cmd-input::placeholder{color:#334155}
+#confirm-bar{display:flex;align-items:center;gap:10px;border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.08);border-radius:3px;padding:9px 12px;font-family:var(--mono);font-size:10px;color:#fcd34d;animation:pulsebar 1.4s ease-in-out infinite}
+@keyframes pulsebar{50%{box-shadow:0 0 22px -6px rgba(251,191,36,.6)}}
+
+/* ---------- tool tiles ---------- */
+#tools-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+@media(min-width:640px){#tools-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:1200px){#tools-grid{grid-template-columns:repeat(4,1fr)}}
+.tile{position:relative;overflow:hidden;text-align:left;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.025);border-radius:3px;padding:10px;transition:all .2s;color:var(--tx)}
+.tile:hover:not(:disabled){transform:translateY(-2px);border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.07);box-shadow:0 8px 28px -10px rgba(34,211,238,.5)}
+.tile:disabled{opacity:.4;cursor:not-allowed}
+.tile svg{color:var(--cy);margin-bottom:7px;display:block}
+.tile.red svg{color:var(--red)}
+.tile.red:hover:not(:disabled){border-color:rgba(244,63,94,.5);background:rgba(244,63,94,.07);box-shadow:0 8px 28px -10px rgba(244,63,94,.5)}
+.tile b{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;font-weight:700}
+.tile span{display:block;margin-top:2px;font-family:var(--mono);font-size:8.5px;line-height:1.4;color:var(--dim)}
+
+/* ---------- engine / ai / scheduler ---------- */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat .l{font-size:8px;font-weight:700;letter-spacing:.25em;color:var(--dim);text-transform:uppercase}
+.stat .v{font-family:var(--mono);font-size:14px;font-weight:700;color:#a5f3fc;margin-top:2px}
+.meter{height:4px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+.meter>div{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--cy-dim),var(--cy));transition:width .7s}
+.ai-row{display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.02);border-radius:3px;padding:7px 10px;margin-bottom:5px}
+.ai-row.on{border-color:rgba(34,211,238,.4);background:rgba(34,211,238,.08);box-shadow:0 0 18px -8px rgba(34,211,238,.8)}
+.ai-row b{font-family:var(--mono);font-size:10px;letter-spacing:.1em}
+.ai-row small{font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+.ai-row em{margin-left:auto;font-style:normal;font-size:8px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+.ai-row em.prim{color:rgba(251,113,133,.9)}
+.job{display:flex;align-items:center;gap:10px;border:1px solid rgba(34,211,238,.15);background:rgba(34,211,238,.05);border-radius:3px;padding:8px 11px;margin-bottom:7px}
+.job .jt{font-family:var(--mono);font-size:10px;font-weight:700;color:#e0f2fe}
+.job .js{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.job.done{opacity:.5;border-color:rgba(255,255,255,.05);background:rgba(0,0,0,.3)}
+.job button{margin-left:auto;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--dim);border-radius:3px;width:22px;height:22px;display:grid;place-items:center;transition:all .2s}
+.job button:hover{border-color:rgba(244,63,94,.6);color:var(--red)}
+.q-line{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--dim);padding:2px 0}
+.q-line b{color:#94a3b8;font-weight:400}
+
+/* ---------- logs / diag ---------- */
+.logrow{display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid rgba(255,255,255,.03);padding:6px 4px;font-family:var(--mono);font-size:9.5px}
+.logrow:last-child{border:0}
+.tag{flex:none;border:1px solid;border-radius:3px;padding:0 6px;font-size:8px;font-weight:700;line-height:16px}
+.tag.INFO{border-color:rgba(34,211,238,.3);background:rgba(34,211,238,.09);color:#67e8f9}
+.tag.WARN{border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.09);color:#fcd34d}
+.tag.ERROR{border-color:rgba(244,63,94,.3);background:rgba(244,63,94,.09);color:#fda4af}
+.tag.CMD{border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.09);color:#c4b5fd}
+.tag.OK{border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.09);color:#6ee7b7}
+.logrow .src{flex:none;color:#3f5468}
+.logrow .m{flex:1;min-width:0;word-break:break-word;color:#94a3b8}
+.logrow .t{flex:none;color:#334155}
+.scrolly{height:250px;overflow-y:auto}
+.diag-row{display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.3);border-radius:3px;padding:7px 10px;margin-bottom:5px}
+.diag-row .st{flex:none;border:1px solid;border-radius:3px;padding:0 7px;font-family:var(--mono);font-size:8px;font-weight:700;line-height:16px}
+.diag-row .st.PASS{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1);color:#6ee7b7}
+.diag-row .st.WARN{border-color:rgba(251,191,36,.4);background:rgba(251,191,36,.1);color:#fcd34d}
+.diag-row .st.FAIL{border-color:rgba(244,63,94,.4);background:rgba(244,63,94,.1);color:#fda4af}
+.diag-row b{flex:none;width:118px;font-family:var(--mono);font-size:9.5px;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diag-row span{flex:1;min-width:0;font-family:var(--mono);font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- v4: accounts / modal / scripts ---------- */
+.acc-row{display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:9px 10px;margin-bottom:7px}
+.badge{flex:none;font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.15em;border:1px solid;border-radius:3px;padding:1px 7px;line-height:15px}
+.badge.act{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1);color:#6ee7b7}
+.badge.idle{border-color:rgba(255,255,255,.14);color:var(--dim)}
+.acc-ops{margin-left:auto;display:flex;gap:5px;flex:none}
+.mini{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#cbd5e1;border-radius:3px;padding:4px 9px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;transition:all .2s}
+.mini:hover:not(:disabled){border-color:rgba(34,211,238,.5);color:#a5f3fc}
+.mini.red:hover:not(:disabled){border-color:rgba(244,63,94,.5);color:#fda4af}
+.mini:disabled{opacity:.35;cursor:not-allowed}
+.mini.armed{border-color:rgba(244,63,94,.6);color:#fda4af}
+#modal{position:fixed;inset:0;z-index:96;display:flex;align-items:center;justify-content:center;background:rgba(2,5,13,.9);backdrop-filter:blur(6px);padding:16px}
+.modal-card{width:min(92vw,440px);position:relative}
+.modal-card .p-body{max-height:76vh;overflow-y:auto}
+textarea.code{width:100%;min-height:170px;resize:vertical;background:rgba(0,0,0,.55);border:1px solid rgba(34,211,238,.12);border-radius:3px;color:#a5f3fc;font-family:var(--mono);font-size:11px;line-height:1.6;padding:11px;outline:none;transition:border-color .2s;white-space:pre}
+textarea.code:focus{border-color:rgba(34,211,238,.5)}
+select.sel{width:100%;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.1);border-radius:3px;color:#cffafe;font-family:var(--mono);font-size:11px;padding:9px 10px;outline:none}
+select.sel:focus{border-color:rgba(34,211,238,.5)}
+.sc-out{max-height:160px;overflow-y:auto;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.45);border-radius:3px;padding:10px;font-family:var(--mono);font-size:9.5px;line-height:1.65}
+.sc-out p{white-space:pre-wrap;word-break:break-word}
+.sc-out .lg{color:#94a3b8}.sc-out .lg::before{content:'▸ ';color:#164e63}
+.sc-out .em{color:#fda4af}.sc-out .ok{color:#6ee7b7}
+.btnrow{display:flex;gap:7px}
+.btnrow .btn{flex:1;width:auto}
+.cfgstatus{font-family:var(--mono);font-size:8.5px;color:#475569;letter-spacing:.12em;margin-top:9px}
+.acct-mini{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:99px;border:1px solid rgba(34,211,238,.4);background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(244,63,94,.2));font-family:var(--disp);font-weight:900;font-size:11px;color:#a5f3fc;flex:none}
+
+/* ---------- script editor v2 (line numbers + terminal) ---------- */
+.ln-wrap{display:flex;align-items:stretch;border:1px solid rgba(34,211,238,.12);border-radius:3px;background:rgba(0,0,0,.55);overflow:hidden}
+.ln-nums{flex:none;width:44px;padding:10px 8px 10px 0;margin:0;text-align:right;font-family:var(--mono);font-size:11px;line-height:1.62;color:#475569;background:rgba(0,0,0,.35);border-right:1px solid rgba(34,211,238,.08);user-select:none;overflow:hidden;white-space:pre}
+textarea.code.lined{flex:1;min-height:230px;border:0;outline:none;background:transparent;color:#a5f3fc;font-family:var(--mono);font-size:11px;line-height:1.62;padding:10px;resize:vertical;white-space:pre;overflow:auto}
+textarea.code.lined:focus{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
+.mode-seg{display:flex;gap:4px}
+.seg{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);color:var(--dim);padding:5px 12px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;transition:all .2s}
+.seg.on-safe{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.1);color:#6ee7b7}
+.seg.on-raw{border-color:rgba(244,63,94,.55);background:rgba(244,63,94,.12);color:#fda4af}
+.gchip{border:1px solid rgba(34,211,238,.18);background:rgba(34,211,238,.05);color:rgba(103,232,249,.75);border-radius:3px;padding:3px 8px;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em}
+.run-badge{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.2em;border:1px solid rgba(251,191,36,.5);background:rgba(251,191,36,.12);color:#fcd34d;border-radius:3px;padding:2px 8px;animation:ping2 1.4s ease-in-out infinite}
+@keyframes ping2{50%{box-shadow:0 0 14px -2px rgba(251,191,36,.7)}}
+.sc-term-out{max-height:190px;overflow-y:auto;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.45);border-radius:3px;padding:9px 10px;font-family:var(--mono);font-size:9.5px;line-height:1.6}
+.lrow{display:flex;gap:8px;align-items:flex-start;padding:1px 0;white-space:pre-wrap;word-break:break-word}
+.lts{color:#3f5468;flex:none}
+.llv{flex:none;width:34px;font-weight:700;letter-spacing:.05em}
+.ld-INFO{color:#67e8f9}.ld-WARN{color:#fcd34d}.ld-ERROR{color:#fda4af}.ld-OK{color:#6ee7b7}
+.lmsg{color:#94a3b8;flex:1;min-width:0}
+.term-toolbar{display:flex;gap:5px;align-items:center}
+.sc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+@media(max-width:560px){.sc-grid2{grid-template-columns:1fr}}
+.warn-line{margin-bottom:9px}
+/* ---------- automation mode (account-bound custom script runner) ---------- */
+.vrow{display:flex;gap:8px;align-items:flex-start;font-family:var(--mono);font-size:9.5px;padding:2px 0}
+.vrow b{flex:none;width:14px;font-weight:700}
+.vrow.okv b{color:#6ee7b7}.vrow.okv span{color:#94a3b8}
+.vrow.nov b{color:#fda4af}.vrow.nov span{color:#fda4af}
+.vbox{border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.4);border-radius:3px;padding:9px 11px}
+.vbox.pass{border-color:rgba(52,211,153,.35)}
+.vbox.fail{border-color:rgba(244,63,94,.4)}
+.runcard{border:1px solid rgba(34,211,238,.28);background:rgba(34,211,238,.05);border-radius:3px;padding:10px 12px;font-family:var(--mono);font-size:10px;line-height:1.7}
+.runcard .kv2{display:flex;justify-content:space-between;gap:10px}
+.runcard .kv2 span{color:#475569}.runcard .kv2 b{color:#e0f2fe;font-weight:600}
+.runcard.done{border-color:rgba(52,211,153,.4)}
+.runcard.fail{border-color:rgba(244,63,94,.45)}
+.pbar{height:4px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:7px}
+.pbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--cy-dim),var(--cy));transition:width .5s}
+.tplrow{border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.32);border-radius:3px;padding:8px 10px;margin-bottom:6px}
+.tplrow .t1{display:flex;align-items:center;gap:8px}
+.tplrow .nm{font-family:var(--mono);font-size:10.5px;font-weight:700;color:#e2e8f0}
+.tplrow .meta2{font-family:var(--mono);font-size:8.5px;color:#475569;margin-top:2px}
+.tplops{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+.tplops .mini{padding:3px 7px;font-size:8.5px}
+/* ---------- agent operations control center ---------- */
+.ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:11px}
+.ops-card{border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.34);border-radius:3px;padding:9px 11px}
+.ops-card .l{font-family:var(--mono);font-size:8px;letter-spacing:.22em;color:#475569;text-transform:uppercase}
+.ops-card .v{font-family:var(--disp);font-size:17px;font-weight:900;color:#a5f3fc;margin-top:3px}
+.ops-card .s{font-family:var(--mono);font-size:8.5px;color:#64748b;margin-top:2px}
+.ops-card.ok .v{color:#6ee7b7}.ops-card.warn .v{color:#fcd34d}.ops-card.err .v{color:#fda4af}
+.trow{display:flex;align-items:flex-start;gap:9px;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:8px 10px;margin-bottom:6px}
+.trow .ti{font-family:var(--mono);font-size:10px;font-weight:700;color:#e2e8f0}
+.trow .tm{font-family:var(--mono);font-size:8.5px;color:#64748b;margin-top:2px}
+.st-pill{flex:none;font-family:var(--mono);font-size:8px;font-weight:700;border:1px solid;border-radius:3px;padding:1px 7px;line-height:15px}
+.st-MONITORING,.st-RUNNING{border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.1);color:#6ee7b7}
+.st-WAITING,.st-PAUSED,.st-PLANNING{border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.1);color:#fcd34d}
+.st-FAILED{border-color:rgba(244,63,94,.45);background:rgba(244,63,94,.1);color:#fda4af}
+.st-COMPLETED,.st-STOPPED,.st-EXPIRED{border-color:rgba(255,255,255,.14);color:#64748b}
+.mem-line{font-family:var(--mono);font-size:9px;color:#94a3b8;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.mem-line b{color:#67e8f9;font-weight:600}
+.mainch{display:flex;gap:5px;margin-bottom:5px}
+.mainch input{flex:1;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.5);border-radius:3px;padding:6px 9px;font-family:var(--mono);font-size:10px;color:#cffafe;outline:none}
+.mainch input:focus{border-color:rgba(34,211,238,.6)}
+
+/* ---------- lock veil / offline / toasts ---------- */
+.veil{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(2,6,16,.82);backdrop-filter:blur(3px);border-radius:4px;text-align:center;padding:16px}
+.veil svg{color:rgba(251,191,36,.8)}
+.veil p{font-family:var(--mono);font-size:10px;letter-spacing:.25em;text-transform:uppercase;color:rgba(252,211,77,.8)}
+#offline{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(2,5,13,.94);backdrop-filter:blur(8px);text-align:center;padding:24px}
+#toasts{position:fixed;top:14px;right:14px;z-index:95;display:flex;flex-direction:column;gap:8px;max-width:min(92vw,380px)}
+.toast{border:1px solid;border-radius:3px;background:rgba(3,9,20,.95);backdrop-filter:blur(8px);padding:10px 14px;font-family:var(--mono);font-size:10px;line-height:1.5;box-shadow:0 14px 40px -12px rgba(0,0,0,.8);animation:tin .25s ease-out}
+@keyframes tin{from{transform:translateX(20px);opacity:0}}
+.toast.ok{border-color:rgba(52,211,153,.4);color:#6ee7b7}
+.toast.err{border-color:rgba(244,63,94,.5);color:#fda4af}
+.toast.info{border-color:rgba(34,211,238,.4);color:#67e8f9}
+.foot{border:1px solid rgba(34,211,238,.1);border-radius:3px;background:rgba(0,0,0,.4);padding:12px 16px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:#3f5468}
 </style>
 </head>
-<body class="scanline text-slate-200 min-h-screen overflow-x-hidden">
+<body>
 
-<canvas id="stars" class="fixed inset-0 z-0 opacity-70"></canvas>
-<div class="fixed inset-0 z-0 pointer-events-none">
-  <div class="absolute -top-40 left-1/3 w-[46rem] h-[46rem] rounded-full" style="background:radial-gradient(circle, rgba(14,116,144,.20), transparent 65%)"></div>
-  <div class="absolute bottom-0 right-0 w-[38rem] h-[38rem] rounded-full" style="background:radial-gradient(circle, rgba(76,29,149,.16), transparent 65%)"></div>
-  <div class="absolute inset-0" style="background-image:linear-gradient(rgba(56,189,248,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,.05) 1px, transparent 1px); background-size:44px 44px; mask-image:radial-gradient(ellipse at center, black 35%, transparent 78%);"></div>
+<!-- backdrop -->
+<div class="bgfx">
+  <div class="glow-a"></div><div class="glow-b"></div>
+  <div class="grid-bg"></div><canvas id="stars"></canvas>
+  <div class="scanlines"></div><div class="beam"></div><div class="vig"></div>
 </div>
 
-<div id="boot" class="fixed inset-0 z-50 bg-[#04060c] flex items-center justify-center">
-  <div class="w-[min(34rem,90vw)]">
-    <div class="mono text-[.65rem] tracking-[.3em] text-cyan-500/80 mb-3">PRODUCTION TELEGRAM AI CONTROL</div>
-    <h1 class="text-4xl font-bold text-cyan-300 glow-text mono">DEVIL JARVIS</h1>
-    <div class="mono text-xs text-slate-400 mt-4 space-y-1.5 h-28" id="bootLog"></div>
-    <div class="mt-4 h-1 bg-slate-800 rounded overflow-hidden">
-      <div id="bootBar" class="h-full bg-cyan-400/80 bar-anim" style="width:5%"></div>
+<!-- boot -->
+<div id="boot">
+  <div class="reactor" style="width:150px;height:150px;margin-bottom:26px">
+    <svg viewBox="0 0 200 200" class="spin-a" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(34,211,238,.12)" stroke-width="1"/>
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(34,211,238,.65)" stroke-width="1.5" stroke-dasharray="40 380" stroke-linecap="round"/>
+      <circle cx="100" cy="100" r="80" fill="none" stroke="rgba(34,211,238,.2)" stroke-width="1" stroke-dasharray="4 8"/>
+    </svg>
+    <svg viewBox="0 0 200 200" class="spin-b" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.1)" stroke-width="8"/>
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.55)" stroke-width="8" stroke-dasharray="60 330" stroke-linecap="round"/>
+      <circle cx="100" cy="100" r="46" fill="none" stroke="rgba(244,63,94,.4)" stroke-width="1" stroke-dasharray="2 6"/>
+    </svg>
+    <div style="position:absolute;inset:0;display:grid;place-items:center">
+      <div style="display:grid;place-items:center;width:48px;height:48px;border-radius:99px;border:1px solid rgba(103,232,249,.5);background:#03121f;box-shadow:0 0 35px rgba(34,211,238,.55)">
+        <span id="boot-pct" style="font-family:var(--disp);font-size:13px;font-weight:900;color:#67e8f9">0</span>
+      </div>
     </div>
   </div>
+  <h1 class="boot-title"><span class="tx-red">DEVIL</span> <span class="tx-cy">JARVIS</span></h1>
+  <p class="boot-sub">Telegram AI Control System</p>
+  <div id="boot-lines"></div>
+  <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
 </div>
 
-<header class="relative z-10 border-b border-cyan-500/10 bg-[#060a14]/70 backdrop-blur-md sticky top-0">
-  <div class="max-w-[1600px] mx-auto px-5 py-3 flex items-center gap-4 flex-wrap">
-    <div class="flex items-center gap-3">
-      <div class="w-9 h-9 rounded-lg border border-cyan-400/40 flex items-center justify-center bg-cyan-400/10 shadow-[0_0_20px_rgba(56,189,248,.25)]">
-        <i data-lucide="brain-circuit" class="w-5 h-5 text-cyan-300"></i>
-      </div>
-      <div>
-        <div class="mono font-bold text-cyan-200 tracking-[.25em] leading-none">DEVIL JARVIS</div>
-        <div class="text-[.58rem] text-slate-500 tracking-[.2em] mt-1">UNDERSTAND · RESOLVE · DISCOVER · PLAN · CONFIRM · EXECUTE · VERIFY</div>
-      </div>
-    </div>
-    <nav class="hidden md:flex items-center gap-1 mono text-[.6rem]">
-      <a href="#sec-dash" class="chip badge text-slate-400 border-transparent">DASHBOARD</a>
-      <a href="#sec-console" class="chip badge text-slate-400 border-transparent">CONSOLE</a>
-      <a href="#sec-channels" class="chip badge text-slate-400 border-transparent">CHANNELS</a>
-      <a href="#sec-folders" class="chip badge text-slate-400 border-transparent">FOLDERS</a>
-      <a href="#sec-tools" class="chip badge text-slate-400 border-transparent">TOOLS</a>
-      <a href="#sec-ai" class="chip badge text-slate-400 border-transparent">AI</a>
-      <a href="#sec-heal" class="chip badge text-slate-400 border-transparent">HEAL</a>
-    </nav>
-    <div class="flex items-center gap-2.5 ml-auto flex-wrap">
-      <span class="badge flex items-center gap-1.5" id="pillTelethon"><span class="dot off"></span>TELETHON</span>
-      <span class="badge flex items-center gap-1.5" id="pillAI"><span class="dot off"></span>AI</span>
-      <span class="badge flex items-center gap-1.5" id="pillTools">TOOLS —</span>
-      <span class="badge flex items-center gap-1.5"><i data-lucide="timer" class="w-3 h-3"></i><span id="uptime">0s</span></span>
-      <span class="badge flex items-center gap-1.5"><i data-lucide="clock" class="w-3 h-3"></i><span id="clock">--:--:--</span></span>
-      <span class="badge flex items-center gap-1.5 text-emerald-300 border-emerald-400/30 bg-emerald-400/5"><span class="dot on"></span>LIVE</span>
-    </div>
+<!-- offline overlay -->
+<div id="offline" class="hidden">
+  <div class="reactor" style="width:90px;height:90px">
+    <svg viewBox="0 0 200 200" class="spin-a" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="94" fill="none" stroke="rgba(244,63,94,.6)" stroke-width="2" stroke-dasharray="50 250" stroke-linecap="round"/>
+    </svg>
+    <svg viewBox="0 0 200 200" class="spin-b" style="position:absolute;inset:0">
+      <circle cx="100" cy="100" r="62" fill="none" stroke="rgba(34,211,238,.4)" stroke-width="6" stroke-dasharray="60 330" stroke-linecap="round"/>
+    </svg>
   </div>
-</header>
+  <h2 style="font-family:var(--disp);letter-spacing:.3em;font-size:16px" class="tx-red">BACKEND OFFLINE</h2>
+  <p class="note" style="max-width:420px;line-height:1.9">
+    Cannot reach <b style="color:#67e8f9">/health</b>. Start the JARVIS node with
+    <b style="color:#67e8f9">python main.py</b> (binds 0.0.0.0:$PORT).<br/>
+    Retrying automatically…
+  </p>
+  <button class="btn sm ghost" id="offline-retry">Retry now</button>
+</div>
 
-<main class="relative z-10 max-w-[1600px] mx-auto px-5 py-5 space-y-5">
+<div id="toasts"></div>
 
-<!-- ════ OVERVIEW ════ -->
-<section id="sec-dash" class="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3" >
-  <div class="hud-panel stat-card p-3.5" ><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">JARVIS</div>
-    <div class="mono text-lg text-cyan-200 mt-1" id="statJarvis">—</div><div class="mono text-[.55rem] text-slate-500" id="statJarvisSub">booting</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">TELEGRAM</div>
-    <div class="mono text-lg mt-1" id="statTg">—</div><div class="mono text-[.55rem] text-slate-500" id="statTgSub">—</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">AI PROVIDERS</div>
-    <div class="mono text-lg mt-1" id="statAI">—</div><div class="mono text-[.55rem] text-slate-500" id="statAISub">—</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">ACCOUNTS</div>
-    <div class="mono text-lg mt-1" id="statAccounts">—</div><div class="mono text-[.55rem] text-slate-500" id="statAccountsSub">—</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">ACTIVE TASKS</div>
-    <div class="mono text-lg mt-1" id="statTasks">—</div><div class="mono text-[.55rem] text-slate-500">task engine</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">MONITORS</div>
-    <div class="mono text-lg mt-1" id="statMonitors">—</div><div class="mono text-[.55rem] text-slate-500">watch engine</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">SCHEDULED</div>
-    <div class="mono text-lg mt-1" id="statSchedules">—</div><div class="mono text-[.55rem] text-slate-500">queue (KTM)</div></div>
-  <div class="hud-panel stat-card p-3.5"><div class="mono text-[.55rem] tracking-[.2em] text-slate-500">RECENT ERRORS</div>
-    <div class="mono text-lg mt-1" id="statErrors">—</div><div class="mono text-[.55rem] text-slate-500" id="statErrorsSub">—</div></div>
-</section>
-
-<div class="grid grid-cols-12 gap-5">
-
-  <!-- LEFT: ACCOUNTS + PERSISTENCE -->
-  <section class="col-span-12 lg:col-span-3 space-y-5">
-    <div class="hud-panel p-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="hud-title flex items-center gap-2"><i data-lucide="users" class="w-3.5 h-3.5"></i>Accounts</div>
-        <button id="btnAddAccount" class="btn text-[.65rem] mono px-2.5 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1">
-          <i data-lucide="user-plus" class="w-3 h-3"></i>ADD</button>
-      </div>
-      <div id="accountsList" class="space-y-3 panel-scroll max-h-[24rem] overflow-y-auto pr-1">
-        <div class="skeleton h-24"></div>
-      </div>
-    </div>
-    <div class="hud-panel p-4">
-      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="database" class="w-3.5 h-3.5"></i>Persistence (data/)</div>
-      <div id="persistRow" class="flex flex-wrap gap-1.5"></div>
-      <div id="limitsRow" class="mono text-[.6rem] text-slate-500 mt-3"></div>
+<!-- add account modal -->
+<div id="modal" class="hidden">
+  <section class="panel modal-card"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+    <div class="p-head"><h2>Add Account</h2><button class="mini" id="btn-m-close">✕ Close</button></div>
+    <div class="p-body">
+      <label class="field"><span><span class="lb">Label</span><span class="hint">display name</span></span>
+        <input id="m-label" placeholder="SPIDEY PREDICTION" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">API ID</span><span class="hint">my.telegram.org</span></span>
+        <input id="m-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">API HASH</span><span class="hint">encrypted at rest</span></span>
+        <input id="m-apihash" type="password" placeholder="••••••••••••••••" autocomplete="off"/></label>
+      <label class="field"><span><span class="lb">Session String</span><span class="hint">Telethon</span></span>
+        <input id="m-session" type="password" placeholder="BQAAAA…" autocomplete="off"/></label>
+      <div id="m-err" class="err-box hidden" style="margin-bottom:10px"></div>
+      <button class="btn" id="btn-m-add">Connect &amp; Save</button>
+      <p class="note" style="margin-top:10px">Session Telegram ke against validate hoti hai, phir Fernet-encrypted
+        save hoti hai (jab JARVIS_SECRET_KEY set ho). Hash/session kabhi plain JSON ya logs me nahi jaate.</p>
     </div>
   </section>
+</div>
 
-  <!-- CENTER: GOAL CONSOLE -->
-  <section id="sec-console" class="col-span-12 lg:col-span-6 space-y-5">
-    <div class="hud-panel p-5">
-      <div class="hud-title flex items-center gap-2 mb-4"><i data-lucide="terminal" class="w-3.5 h-3.5"></i>Goal Console — goal → intent → entities → plan → tools → risk → verified execution</div>
+<!-- ============ HEADER ============ -->
+<header class="top">
+  <div class="top-row">
+    <div class="brand">
+      <div class="reactor" style="width:40px;height:40px;flex:none">
+        <svg viewBox="0 0 100 100" class="spin-a" style="position:absolute;inset:0"><circle cx="50" cy="50" r="46" fill="none" stroke="rgba(34,211,238,.5)" stroke-width="2.5" stroke-dasharray="28 260" stroke-linecap="round"/><circle cx="50" cy="50" r="36" fill="none" stroke="rgba(34,211,238,.2)" stroke-width="1" stroke-dasharray="3 6"/></svg>
+        <svg viewBox="0 0 100 100" class="spin-b" style="position:absolute;inset:0"><circle cx="50" cy="50" r="26" fill="none" stroke="rgba(244,63,94,.55)" stroke-width="3" stroke-dasharray="18 145" stroke-linecap="round"/></svg>
+        <div style="position:absolute;inset:0;display:grid;place-items:center"><div style="width:11px;height:11px;border-radius:99px;background:#67e8f9;box-shadow:0 0 14px rgba(34,211,238,.9)"></div></div>
+      </div>
+      <div>
+        <h1><span class="tx-red">DEVIL</span> <span class="tx-cy">JARVIS</span></h1>
+        <small>Telegram AI Control System</small>
+      </div>
+    </div>
+    <div class="pills">
+      <div class="pill"><span class="dot dim" id="d-backend"></span><span class="k">Backend</span><b class="v dim" id="p-backend">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-telegram"></span><span class="k">Telegram</span><b class="v dim" id="p-telegram">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-auth"></span><span class="k">Auth</span><b class="v dim" id="p-auth">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-ai"></span><span class="k">AI</span><b class="v dim" id="p-ai">…</b></div>
+      <div class="pill"><span class="dot dim" id="d-engine"></span><span class="k">Engine</span><b class="v dim" id="p-engine">…</b></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div class="clock"><span>NPT</span><b id="clock">--:--:--</b></div>
+      <button class="iconbtn" id="btn-refresh" title="Refresh status">↻ <span style="display:none" class="md-inline">Sync</span></button>
+    </div>
+  </div>
+  <div class="ticker-wrap"><div id="ticker"></div></div>
+</header>
 
-      <div id="confirmBanner" class="hidden mb-4 rounded-lg border border-amber-400/40 bg-amber-400/5 p-3 fade-in">
-        <div class="flex items-start gap-2.5">
-          <i data-lucide="shield-alert" class="w-4 h-4 text-amber-300 mt-0.5"></i>
-          <div class="flex-1">
-            <div class="text-[.7rem] mono text-amber-200" id="confirmText"></div>
-            <div class="flex gap-2 mt-2">
-              <button id="confirmYes" class="btn text-[.65rem] mono px-3 py-1.5 rounded-md bg-emerald-400/15 border border-emerald-400/50 text-emerald-300 hover:bg-emerald-400/25">CONFIRM</button>
-              <button id="confirmNo" class="btn text-[.65rem] mono px-3 py-1.5 rounded-md bg-rose-400/10 border border-rose-400/40 text-rose-300 hover:bg-rose-400/20">ABORT</button>
+<main>
+  <div class="cols">
+    <!-- ============ LEFT ============ -->
+    <div class="stack">
+
+      <!-- TELEGRAM CONNECTION -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-conn">Telegram Connection</h2><span class="meta" id="conn-meta">MTProto</span></div>
+        <div class="p-body">
+          <!-- form view -->
+          <div id="conn-form">
+            <div class="tabs">
+              <button class="tab on" id="tab-session">Session String</button>
+              <button class="tab" id="tab-phone">Phone + OTP</button>
+            </div>
+            <!-- session flow -->
+            <div id="flow-session">
+              <label class="field"><span><span class="lb">API ID</span><span class="hint">my.telegram.org</span></span>
+                <input id="c-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">API HASH</span><span class="hint">kept secret</span></span>
+                <input id="c-apihash" type="password" placeholder="••••••••••••••••" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">Session String</span><span class="hint">Telethon</span></span>
+                <input id="c-session" type="password" placeholder="BQAAAA…" autocomplete="off"/></label>
+              <div id="conn-err" class="err-box hidden" style="margin-bottom:10px"></div>
+              <button class="btn" id="btn-connect">Connect Telegram</button>
+              <p class="note" style="margin-top:10px">A valid StringSession authorizes instantly — OTP is not
+                requested again. Credentials travel over HTTPS, are used in memory only, and are never stored or logged.</p>
+            </div>
+            <!-- phone flow -->
+            <div id="flow-phone" class="hidden">
+              <label class="field"><span><span class="lb">API ID</span></span><input id="p-apiid" inputmode="numeric" placeholder="12345678" autocomplete="off"/></label>
+              <label class="field"><span><span class="lb">API HASH</span></span><input id="p-apihash" type="password" placeholder="••••••••" autocomplete="off"/></label>
+              <div id="step-phone">
+                <label class="field"><span><span class="lb">Phone Number</span><span class="hint">international</span></span>
+                  <input id="p-phone" inputmode="tel" placeholder="+97798XXXXXXXX" autocomplete="off"/></label>
+                <button class="btn" id="btn-sendcode">Send OTP</button>
+              </div>
+              <div id="step-otp" class="hidden">
+                <label class="field"><span><span class="lb">OTP Code</span><span class="hint">from Telegram app</span></span>
+                  <input id="p-otp" inputmode="numeric" placeholder="12345" autocomplete="one-time-code"/></label>
+                <button class="btn" id="btn-verify">Verify OTP</button>
+              </div>
+              <div id="step-2fa" class="hidden">
+                <label class="field"><span><span class="lb">2FA Cloud Password</span><span class="hint">never stored</span></span>
+                  <input id="p-2fa" type="password" placeholder="••••••••" autocomplete="off"/></label>
+                <button class="btn" id="btn-2fa">Verify 2FA</button>
+              </div>
+              <div id="phone-err" class="err-box hidden" style="margin-top:10px"></div>
+              <div id="login-status" class="hidden step-line"><span class="dot info"></span><span id="login-status-tx"></span></div>
+              <div id="sess-reveal" class="reveal hidden">
+                <p style="font-family:var(--mono);font-size:9px;color:#fcd34d;letter-spacing:.15em;margin-bottom:6px">SESSION STRING — SHOWN ONCE, SAVE IT NOW</p>
+                <textarea id="sess-out" readonly></textarea>
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <button class="btn sm ghost" id="btn-copy-sess">Copy</button>
+                  <button class="btn sm" id="btn-hide-sess">I saved it</button>
+                </div>
+              </div>
+              <p class="note" style="margin-top:10px">Full login: API ID + API HASH → Phone → OTP → 2FA (if enabled).
+                OTP and 2FA are used in memory only — never logged, never written to disk.</p>
+            </div>
+          </div>
+          <!-- connected view -->
+          <div id="conn-account" class="hidden">
+            <div id="conn-checks"></div>
+            <div class="acct-box" style="margin:10px 0">
+              <p class="ttl">Account</p>
+              <div class="kv"><span>NAME</span><b id="ca-name">—</b></div>
+              <div class="kv"><span>USERNAME</span><b class="acc" id="ca-user">—</b></div>
+              <div class="kv"><span>USER ID</span><b id="ca-id">—</b></div>
+              <div class="kv"><span>STATUS</span><b class="acc" id="ca-state">—</b></div>
+            </div>
+            <button class="btn ghost" id="btn-disconnect">Disconnect</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SOURCE CONFIGURATION -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-srcfg">Source Configuration</h2><span class="meta">hot reload</span></div>
+        <div class="p-body">
+          <label class="field"><span><span class="lb">Source Chat ID</span><span class="hint">cross engine</span></span>
+            <input id="cf-chat" inputmode="text" placeholder="-1001234567890" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Source Message IDs</span><span class="hint">comma separated</span></span>
+            <input id="cf-ids" placeholder="101, 102, 103" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Monitor Source</span></span>
+            <input id="cf-msrc" placeholder="@sourcechannel" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Monitor Destination</span></span>
+            <input id="cf-mdst" placeholder="@outputchannel" autocomplete="off"/></label>
+          <label class="field"><span><span class="lb">Dead Threshold (days)</span></span>
+            <input id="cf-thresh" inputmode="numeric" placeholder="30" autocomplete="off"/></label>
+          <div style="border-top:1px solid rgba(255,255,255,.06);margin:4px 0 10px;padding-top:10px">
+            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:7px">
+              PER-ACCOUNT (used by Custom Script Runner)</p>
+            <label class="field"><span><span class="lb">Account</span><span class="hint">binds the values below</span></span>
+              <select class="sel" id="ac-account"><option value="">— select account —</option></select></label>
+            <label class="field"><span><span class="lb">Main Channel</span></span>
+              <input id="ac-main" placeholder="1716302260" autocomplete="off"/></label>
+            <label class="field"><span><span class="lb">Source</span></span>
+              <input id="ac-src" placeholder="@sourcechannel" autocomplete="off"/></label>
+            <label class="field"><span><span class="lb">Destination</span></span>
+              <input id="ac-dst" placeholder="@outputchannel" autocomplete="off"/></label>
+            <button class="btn ghost" id="btn-ac-save">Save Account Config</button>
+          </div>
+          <div id="cf-err" class="err-box hidden" style="margin-bottom:10px"></div>
+          <button class="btn" id="btn-cf-save">Save Configuration</button>
+          <p class="cfgstatus" id="cf-status">Priority: JSON config &gt; ENV &gt; default · applies instantly — no redeploy</p>
+        </div>
+        <div class="veil hidden" id="cfg-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to edit config</p></div>
+      </section>
+
+      <!-- JARVIS ACCESS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-access">JARVIS Access</h2><span class="meta" id="access-meta">LOCKED</span></div>
+        <div class="p-body">
+          <div id="access-form">
+            <label class="field"><span><span class="lb">Access Token</span><span class="hint">JARVIS_ACCESS_TOKEN</span></span>
+              <input id="a-token" type="password" placeholder="••••••••" autocomplete="off"/></label>
+            <button class="btn ghost" id="btn-unlock">Unlock Console</button>
+            <div id="a-err" class="err-box hidden" style="margin-top:10px"></div>
+            <p class="note" style="margin-top:10px">User-defined secret from server environment — never hard-coded.
+              Kept in this tab's session storage only.</p>
+          </div>
+          <div id="access-on" class="hidden">
+            <p class="chk" style="font-weight:700;font-size:11px;margin-bottom:8px">✓ JARVIS ACCESS: ENABLED</p>
+            <p class="note">Token verified server-side with a timing-safe compare. Unauthorized callers are refused —
+              fail closed. Everything below honors it.</p>
+            <button class="btn ghost" id="btn-lock" style="margin-top:10px">Lock console</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACCOUNTS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-accs">Accounts</h2><span class="meta" id="accs-meta">0/2</span></div>
+        <div class="p-body">
+          <div id="accs-empty" class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:10px;margin-bottom:8px">
+            No managed accounts — primary login upar se use karo, ya yahan encrypted session add karo.
+          </div>
+          <div id="accs-list"></div>
+          <button class="btn ghost" id="btn-add-acc">+ Add Account</button>
+          <p class="note" style="margin-top:9px">Max 2 accounts. Sessions Fernet-encrypted in accounts.json (jab
+            JARVIS_SECRET_KEY set ho — warna memory-only). Active account par hi saare tools/engine chalte hain;
+            Saved Messages listener dono clients par live rehta hai.</p>
+        </div>
+        <div class="veil hidden" id="accs-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to manage accounts</p></div>
+      </section>
+
+      <!-- ACCOUNT STATUS -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-account">Telegram Account Status</h2></div>
+        <div class="p-body" id="acct-body"><p class="note">Querying backend…</p></div>
+      </section>
+    </div>
+
+    <!-- ============ CENTER: CONSOLE ============ -->
+    <div class="stack">
+      <section class="panel" style="display:flex;flex-direction:column"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-console">Command Console</h2><span class="meta" id="console-meta">READY</span></div>
+        <div class="p-body" style="display:flex;flex-direction:column;gap:11px;flex:1">
+          <div id="term"></div>
+          <div id="confirm-bar" class="hidden">
+            <span style="flex:1">CONFIRM REQUIRED ▸ destructive action. Reply YES to proceed, NO to abort.</span>
+            <b id="confirm-countdown">90s</b>
+            <button class="btn sm" id="btn-confirm-yes" style="border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.15);color:#fde68a">Yes</button>
+            <button class="btn sm ghost" id="btn-confirm-no">Abort</button>
+          </div>
+          <div class="chips" id="chips"></div>
+          <div class="cmd-row">
+            <div class="inwrap"><svg id="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              <input id="cmd-input" placeholder="Ask JARVIS…  e.g. folders ke saare channel check karo" autocomplete="off" spellcheck="false"/>
+            </div>
+            <button class="btn" id="btn-exec" style="width:auto;min-width:110px">Execute</button>
+          </div>
+          <p class="note">Intents compile to validated actions only — no arbitrary code · replies also mirror to Telegram
+            Saved Messages for authorized admins.</p>
+        </div>
+        <div class="veil hidden" id="console-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Locked — unlock JARVIS access</p></div>
+      </section>
+
+      <!-- TELEGRAM TOOLS -->
+      <section class="panel" style="position:relative"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-tools">Telegram Tools</h2><span class="meta">modular registry · whitelist only</span></div>
+        <div class="p-body"><div id="tools-grid"></div>
+          <p class="note" style="margin-top:10px;border-top:1px solid rgba(255,255,255,.05);padding-top:10px">
+            Each tool declares name · description · parameters · permission · executor inside the ToolManager.
+            Destructive tools require confirmation. All tools respect Telegram permissions and FloodWait.</p>
+        </div>
+        <div class="veil hidden" id="tools-veil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Fail-closed — authorization required</p></div>
+      </section>
+
+      <!-- AGENT OPERATIONS CONTROL CENTER -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-ops">Operations Control Center</h2>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="meta" id="ops-clock">—</span>
+            <button class="mini" id="btn-ops-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="p-body">
+          <div class="ops-grid" id="ops-cards"></div>
+
+          <div class="term-toolbar" style="margin-bottom:6px">
+            <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">GIVE JARVIS A GOAL</span>
+          </div>
+          <div class="cmd-row" style="margin-bottom:11px">
+            <div class="inwrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>
+              <input id="ops-goal" placeholder="e.g. is channel pe dhyan rakho, unknown messages delete karte jao" autocomplete="off"/>
+            </div>
+            <button class="btn" id="btn-ops-goal" style="width:auto;min-width:96px">Execute</button>
+          </div>
+
+          <div class="term-toolbar" style="margin-bottom:6px">
+            <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">ACTIVE WORK</span>
+            <span style="margin-left:auto"></span>
+            <button class="mini red" id="btn-ops-stopall">Stop All</button>
+          </div>
+          <div id="ops-tasks" style="margin-bottom:11px"></div>
+
+          <div class="sc-grid2">
+            <div>
+              <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;color:#475569;margin-bottom:6px">MAIN CHANNELS (per account)</p>
+              <select class="sel" id="ops-acct" style="margin-bottom:6px"><option value="">— select account —</option></select>
+              <div id="ops-mains"></div>
+              <div style="display:flex;gap:5px;margin-top:6px">
+                <button class="mini" id="btn-main-add">+ Add Channel</button>
+                <button class="mini" id="btn-main-save">Save</button>
+              </div>
+            </div>
+            <div>
+              <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;color:#475569;margin-bottom:6px">BRAIN / MEMORY</p>
+              <div id="ops-brain"></div>
+            </div>
+          </div>
+          <div id="ops-err" class="err-box hidden" style="margin-top:10px"></div>
+        </div>
+        <div class="veil hidden" id="ops-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to run operations</p></div>
+      </section>
+
+      <!-- CUSTOM SCRIPT (v2 — installer with safe/raw modes) -->
+      <section class="panel" style="position:relative"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head">
+          <h2 id="ic-script">Custom Script Installer</h2>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="run-badge hidden" id="sc-running">RUNNING</span>
+            <div class="mode-seg">
+              <button class="seg on-safe" id="btn-mode-safe">SAFE MODE</button>
+              <button class="seg" id="btn-mode-raw">RAW MODE</button>
+              <button class="seg" id="btn-mode-auto">AUTOMATION</button>
             </div>
           </div>
         </div>
-      </div>
+        <div class="p-body" style="display:flex;flex-direction:column;gap:10px">
+          <div id="sc-autoinfo" class="ok-box warn-line hidden">
+            ✓ Account-bound automation — no Python runs. Only approved ACTIONS execute through the
+            Tool Registry against the <b>selected account's</b> Telegram client. Every task carries
+            account_id + template_id + task_id.
+          </div>
+          <div id="sc-rawwarn" class="warn-box warn-line hidden">
+            ⚠️ Raw code execution. Only use trusted code. Server crash risk if buggy.
+            Code ko install karne se pehle review karo — ye aapke REPONSIBILITY hai.
+          </div>
+          <div class="sc-grid2">
+            <label class="field" style="margin:0"><span><span class="lb">Account</span><span class="hint">managed accounts</span></span>
+              <select class="sel" id="sc-account"><option value="">— select account —</option></select></label>
+            <label class="field" style="margin:0"><span><span class="lb">Script name</span></span>
+              <input id="sc-name" placeholder="Cleaner Bot" autocomplete="off"/></label>
+          </div>
+          <div class="sc-grid2">
+            <label class="field" style="margin:0"><span><span class="lb">Template</span></span>
+              <select class="sel" id="sc-tpl"></select></label>
+            <label class="field" style="margin:0"><span><span class="lb">&nbsp;</span><span class="hint">script.py — telethon context</span></span>
+              <button class="btn sm ghost" id="btn-sc-loadtpl">Load Template</button></label>
+          </div>
 
-      <div id="planCard" class="hidden mb-4 rounded-lg border border-cyan-400/30 bg-cyan-400/5 p-4 fade-in">
-        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-          <div class="hud-title">Plan Preview</div>
-          <div class="flex gap-1.5" id="planBadges"></div>
+          <div class="ln-wrap">
+            <pre class="ln-nums" id="sc-nums">1</pre>
+            <textarea class="code lined" id="sc-code" spellcheck="false" placeholder="# Injected globals: client, SESSION_STRING, PHONE, events, errors, utils, types
+# asyncio, re, time, log(msg), print(...), sleep(secs)
+async def main():
+    me = await client.get_me()
+    log(f'Booted as @{me.username}')
+main()"></textarea>
+          </div>
+
+          <div>
+            <p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:#3f5468;margin-bottom:6px" id="sc-globals-label">ALLOWED GLOBALS</p>
+            <div style="display:flex;flex-wrap:wrap;gap:5px" id="sc-globals"></div>
+          </div>
+
+          <!-- automation-only: validation result + run status (§27,§30,§32) -->
+          <div id="sc-valid" class="hidden"></div>
+          <div id="sc-runcard" class="runcard hidden"></div>
+
+          <div class="btnrow">
+            <button class="btn ghost hidden" id="btn-sc-validate">Validate</button>
+            <button class="btn" id="btn-sc-install" style="box-shadow:0 0 22px -6px rgba(34,211,238,.7)">Install &amp; Run</button>
+            <button class="btn ghost" id="btn-sc-save">Save Template</button>
+            <button class="btn danger" id="btn-sc-stop" disabled>Stop Script</button>
+          </div>
+
+          <!-- automation-only: saved templates (§37) -->
+          <div id="sc-tplbox" class="hidden">
+            <div class="term-toolbar" style="margin-bottom:6px">
+              <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">CUSTOM TEMPLATES</span>
+              <span style="margin-left:auto"></span>
+              <button class="mini" id="btn-tpl-refresh">Refresh</button>
+              <button class="mini" id="btn-tpl-heal" title="Recover runtime state only — never edits your template">Heal</button>
+            </div>
+            <div id="tpl-list"></div>
+          </div>
+
+          <div class="term-toolbar">
+            <span style="font-family:var(--mono);font-size:9px;color:#475569;letter-spacing:.16em">SCRIPT TERMINAL</span>
+            <span style="margin-left:auto"></span>
+            <span id="sc-heal" class="hidden" style="font-family:var(--mono);font-size:8.5px;color:#fcd34d;letter-spacing:.1em"></span>
+            <button class="mini" id="btn-sc-pause">Pause</button>
+            <button class="mini red" id="btn-sc-clear">Clear</button>
+          </div>
+          <div class="sc-term-out" id="sc-out"><p class="note">Script output ▶ live logs with levels (INFO/WARN/ERROR/OK) yahan dikhenge.</p></div>
+
+          <div id="sc-err" class="err-box hidden"></div>
         </div>
-        <div class="mono text-[.68rem] text-cyan-100 mb-2" id="planSummary"></div>
-        <div class="mono text-[.62rem] text-slate-400 mb-2" id="planEntities"></div>
-        <div class="space-y-1 mb-3" id="planSteps"></div>
-        <div class="flex gap-2">
-          <button id="planExecute" class="btn text-[.65rem] mono px-4 py-2 rounded-md bg-emerald-400/15 border border-emerald-400/50 text-emerald-300 hover:bg-emerald-400/25 flex items-center gap-1.5">
-            <i data-lucide="play" class="w-3 h-3"></i>EXECUTE PLAN</button>
-          <button id="planDiscard" class="btn text-[.65rem] mono px-4 py-2 rounded-md bg-slate-700/30 border border-slate-600 text-slate-300 hover:bg-slate-700/50">DISCARD</button>
+        <div class="veil hidden" id="sc-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to use installer</p></div>
+      </section>
+    </div>
+
+    <!-- ============ RIGHT ============ -->
+    <div class="stack">
+      <!-- AI CONTROL -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-ai">AI Control</h2><span class="meta" id="ai-calls">0 calls</span></div>
+        <div class="p-body"><div id="ai-chain"></div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:10px">
+            <div class="stat"><p class="l">Active</p><p class="v" id="ai-active">—</p></div>
+            <div class="stat"><p class="l">Configured</p><p class="v" id="ai-conf">—</p></div>
+            <div class="stat"><p class="l">Calls</p><p class="v" id="ai-total">0</p></div>
+          </div>
+          <p class="note" style="margin-top:10px">Failover chain: GROQ → GEMINI → OPENROUTER → ANTHROPIC → HF → OPENAI.
+            Keys via environment only — never in the browser. Local intents cover NL when no cloud key exists.</p>
         </div>
-      </div>
+      </section>
 
-      <div id="thread" class="panel-scroll h-[21rem] overflow-y-auto space-y-3 pr-2 mb-4"></div>
-
-      <div class="input-hud rounded-xl flex items-center gap-2.5 px-4 py-3">
-        <i data-lucide="sparkles" class="w-4 h-4 text-cyan-400 shrink-0"></i>
-        <input id="goalInput" type="text" placeholder="What should JARVIS do?" autocomplete="off"
-               class="flex-1 bg-transparent outline-none mono text-sm text-cyan-50 placeholder:text-slate-600 min-w-0">
-        <select id="goalAccount" class="mono text-[.65rem] bg-[#0a1222] border border-slate-700 rounded-md px-2 py-1.5 text-slate-300 outline-none">
-          <option value="">AUTO</option>
-        </select>
-        <button id="goalPlanBtn" title="Preview plan (never mutates)" class="btn shrink-0 w-9 h-9 rounded-lg bg-violet-400/15 border border-violet-400/50 text-violet-300 flex items-center justify-center hover:bg-violet-400/25">
-          <i data-lucide="scan-search" class="w-4 h-4"></i></button>
-        <button id="goalSend" title="Execute goal" class="btn shrink-0 w-9 h-9 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-300 flex items-center justify-center hover:bg-cyan-400/25">
-          <i data-lucide="send-horizontal" class="w-4 h-4"></i></button>
-      </div>
-
-      <div class="flex flex-wrap gap-2 mt-3">
-        <span class="chip badge text-slate-400" data-goal="status">status</span>
-        <span class="chip badge text-slate-400" data-goal="main channel ka latest post dikhao">latest post</span>
-        <span class="chip badge text-slate-400" data-goal="forward latest post to saved messages">latest to saved</span>
-        <span class="chip badge text-slate-400" data-goal="effective running tasks aur monitors dikhao">registry</span>
-        <span class="chip badge text-slate-400" data-goal="folders list karo">folders</span>
-        <span class="chip badge text-slate-400" data-goal="run system diagnostics">diagnostics</span>
-        <span class="chip badge text-slate-400" data-goal="heal the system">heal</span>
-        <span class="chip badge text-slate-400" data-goal="help">help</span>
-      </div>
-    </div>
-
-    <!-- DIAGNOSTICS -->
-    <div class="hud-panel p-4">
-      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div class="hud-title flex items-center gap-2"><i data-lucide="activity" class="w-3.5 h-3.5"></i>Diagnostics Stream</div>
-        <div class="mono text-[.6rem] text-slate-500 flex gap-4">
-          <span id="lastSuccess" class="text-emerald-400/80 truncate max-w-[16rem]">—</span>
-          <span id="lastFail" class="text-rose-400/80 truncate max-w-[16rem]">—</span>
+      <!-- CROSS ENGINE -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-engine">Cross-Promotion Engine</h2><span class="meta" id="eng-state">STOPPED</span></div>
+        <div class="p-body">
+          <div style="display:flex;align-items:center;gap:16px">
+            <div style="position:relative;width:96px;height:96px;flex:none">
+              <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="7"/>
+                <circle id="gauge-arc" cx="50" cy="50" r="42" fill="none" stroke="url(#engg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 264" style="transition:stroke-dasharray .7s"/>
+                <defs><linearGradient id="engg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#f43f5e"/></linearGradient></defs>
+              </svg>
+              <div style="position:absolute;inset:0;display:grid;place-items:center;text-align:center">
+                <div><div id="gauge-pct" style="font-family:var(--disp);font-size:17px;font-weight:900">0%</div>
+                <div style="font-size:7px;font-weight:700;letter-spacing:.25em;color:var(--dim)">CYCLE</div></div>
+              </div>
+            </div>
+            <div class="stat-grid" style="flex:1">
+              <div class="stat"><p class="l">Queue</p><p class="v" id="e-queue">0</p></div>
+              <div class="stat"><p class="l">Deferred</p><p class="v" id="e-deferred">0</p></div>
+              <div class="stat"><p class="l">Processed</p><p class="v" id="e-processed">0</p></div>
+              <div class="stat"><p class="l">Failed</p><p class="v" id="e-failed">0</p></div>
+            </div>
+          </div>
+          <div id="e-flood" class="warn-box hidden" style="margin-top:10px"></div>
+          <div id="e-source-err" class="err-box hidden" style="margin-top:10px"></div>
+          <p class="note" id="e-event" style="margin-top:10px;border:1px solid rgba(255,255,255,.05);background:rgba(0,0,0,.4);border-radius:3px;padding:8px 10px">LAST EVENT ▸ —</p>
+          <div id="e-queue-list" style="margin-top:8px"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:10px">
+            <button class="btn sm" id="btn-start">Start</button>
+            <button class="btn sm ghost" id="btn-stop">Stop</button>
+            <button class="btn sm danger" id="btn-reset">Reset</button>
+          </div>
+          <div class="meter" style="margin-top:10px"><div id="e-meter" style="width:0%"></div></div>
         </div>
-      </div>
-      <div id="diagLog" class="panel-scroll h-36 overflow-y-auto mono text-[.65rem] leading-relaxed space-y-1 pr-2"></div>
-    </div>
-  </section>
+      </section>
 
-  <!-- RIGHT: REGISTRIES -->
-  <section class="col-span-12 lg:col-span-3 space-y-5">
-    <div class="hud-panel p-4">
-      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="list-todo" class="w-3.5 h-3.5"></i>Tasks</div>
-      <div id="tasksList" class="space-y-2.5 panel-scroll max-h-56 overflow-y-auto pr-1"></div>
-    </div>
-    <div class="hud-panel p-4">
-      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="radar" class="w-3.5 h-3.5"></i>Monitors</div>
-      <div id="monitorsList" class="space-y-2.5 panel-scroll max-h-48 overflow-y-auto pr-1"></div>
-    </div>
-    <div class="hud-panel p-4">
-      <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i>Scheduler</div>
-      <div id="schedulesList" class="space-y-2.5 panel-scroll max-h-40 overflow-y-auto pr-1"></div>
-    </div>
-  </section>
-</div>
-
-<!-- ════ CHANNELS + FOLDERS ════ -->
-<div class="grid grid-cols-12 gap-5">
-  <section id="sec-channels" class="col-span-12 lg:col-span-6 hud-panel p-5">
-    <div class="flex items-center justify-between mb-3">
-      <div class="hud-title flex items-center gap-2"><i data-lucide="tv" class="w-3.5 h-3.5"></i>Main Channels</div>
-      <button onclick="poll(true)" class="btn text-[.62rem] mono px-2.5 py-1.5 rounded-md border border-slate-600 text-slate-400 hover:text-slate-200 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH</button>
-    </div>
-    <div id="channelsList" class="space-y-2.5 panel-scroll max-h-80 overflow-y-auto pr-1">
-      <div class="mono text-[.6rem] text-slate-600 text-center py-4">LOADING…</div>
-    </div>
-  </section>
-
-  <section id="sec-folders" class="col-span-12 lg:col-span-6 hud-panel p-5">
-    <div class="flex items-center justify-between mb-3">
-      <div class="hud-title flex items-center gap-2"><i data-lucide="folder" class="w-3.5 h-3.5"></i>Telegram Folders</div>
-      <button onclick="loadFolders(true)" class="btn text-[.62rem] mono px-2.5 py-1.5 rounded-md border border-slate-600 text-slate-400 hover:text-slate-200 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH</button>
-    </div>
-    <div id="foldersList" class="space-y-2 panel-scroll max-h-40 overflow-y-auto pr-1">
-      <div class="mono text-[.6rem] text-slate-600 text-center py-4">LOADING…</div>
-    </div>
-    <div id="foldersDetail" class="mt-3 mono text-[.62rem] text-slate-400 space-y-1 panel-scroll max-h-40 overflow-y-auto"></div>
-  </section>
-</div>
-
-<!-- ════ AI + HEAL ════ -->
-<div class="grid grid-cols-12 gap-5">
-  <section id="sec-ai" class="col-span-12 lg:col-span-5 hud-panel p-5">
-    <div class="hud-title flex items-center gap-2 mb-3"><i data-lucide="cpu" class="w-3.5 h-3.5"></i>AI Provider Layer</div>
-    <div id="aiProviders" class="space-y-2.5"></div>
-    <p class="mono text-[.58rem] text-slate-600 mt-3">Keys are read from environment only and never displayed. AI never executes tools directly — every decision is registry-validated.</p>
-  </section>
-
-  <section id="sec-heal" class="col-span-12 lg:col-span-7 hud-panel p-5">
-    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <div class="hud-title flex items-center gap-2"><i data-lucide="heart-pulse" class="w-3.5 h-3.5"></i>Healing Center</div>
-      <div class="flex gap-2">
-        <button id="btnSelftest" class="btn text-[.62rem] mono px-3 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1.5">
-          <i data-lucide="stethoscope" class="w-3 h-3"></i>RUN DIAGNOSTICS</button>
-        <button id="btnHeal" class="btn text-[.62rem] mono px-3 py-1.5 rounded-md border border-emerald-400/40 text-emerald-300 hover:bg-emerald-400/10 flex items-center gap-1.5">
-          <i data-lucide="bandage" class="w-3 h-3"></i>APPLY SAFE HEALING</button>
-      </div>
-    </div>
-    <div id="selftestTable" class="grid sm:grid-cols-2 gap-1.5 mb-3"></div>
-    <div id="healLog" class="mono text-[.62rem] text-slate-400 space-y-1 panel-scroll max-h-44 overflow-y-auto"></div>
-  </section>
-</div>
-
-<!-- ════ TOOLBOX ════ -->
-<section id="sec-tools" class="hud-panel p-5">
-  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
-    <div class="hud-title flex items-center gap-2"><i data-lucide="wrench" class="w-3.5 h-3.5"></i>Tool Registry — discoverable telegram toolbox</div>
-    <div class="flex gap-2 items-center flex-wrap">
-      <input id="toolFilter" placeholder="filter tools..." class="mono text-[.65rem] bg-[#0a1222] border border-slate-700 rounded-md px-2.5 py-1.5 text-slate-300 outline-none w-44">
-      <button id="toolsRefresh" class="btn text-[.65rem] mono px-3 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 flex items-center gap-1.5">
-        <i data-lucide="refresh-cw" class="w-3 h-3"></i>REFRESH TOOLS</button>
+      <!-- SCHEDULER -->
+      <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+        <div class="p-head"><h2 id="ic-sched">Scheduler</h2><span class="meta" id="sched-meta">0 active · NPT</span></div>
+        <div class="p-body">
+          <div id="jobs-empty" class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:11px">
+            No jobs armed — natural language scheduling:<br/>
+            <span style="color:rgba(34,211,238,.55)">"10 minute baad start karo"<br/>"7:30 PM par stop karo"<br/>"kal 8 baje start karo"</span>
+          </div>
+          <div id="jobs-list"></div>
+          <p class="note">Clock: Asia/Kathmandu. Jobs persist to scheduled_jobs.json, recover after restarts, and
+            never fire twice (job-id guards).</p>
+        </div>
+      </section>
     </div>
   </div>
-  <div class="panel-scroll max-h-[24rem] overflow-y-auto overflow-x-auto">
-    <table class="w-full text-left min-w-[60rem]">
-      <thead class="sticky top-0 bg-[#0a1120] z-10">
-        <tr class="mono text-[.58rem] text-slate-500 tracking-[.15em]">
-          <th class="py-2 pr-3">TOOL</th><th class="py-2 pr-3">CATEGORY</th><th class="py-2 pr-3">STATUS</th>
-          <th class="py-2 pr-3">DESCRIPTION</th><th class="py-2 pr-3">FLAGS</th><th class="py-2 pr-3">LAST USED</th>
-          <th class="py-2 pr-3">LAST ERROR</th><th class="py-2 pr-3 text-right">ACTIONS</th>
-        </tr>
-      </thead>
-      <tbody id="toolboxBody" class="mono text-[.63rem]"></tbody>
-    </table>
+
+  <!-- ============ BOTTOM ============ -->
+  <div class="row2" style="margin-top:14px">
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-logs">Activity Logs</h2><span class="meta" id="logs-meta">0 events</span></div>
+      <div class="p-body" style="padding:6px 10px"><div id="logs-list" class="scrolly"></div>
+        <p class="note" style="border-top:1px solid rgba(255,255,255,.05);padding:8px 0 2px">Safe-log policy ▸ API_HASH · SESSION · OTP · 2FA · tokens never written</p>
+      </div>
+      <div class="veil hidden" id="logs-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to stream logs</p></div>
+    </section>
+
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-hist">Command History</h2><span class="meta">ai_history.json</span></div>
+      <div class="p-body" style="padding:6px 10px"><div id="hist-list" class="scrolly"></div></div>
+      <div class="veil hidden" id="hist-veil"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>Unlock to view history</p></div>
+    </section>
+
+    <section class="panel"><span class="corner c-tl"></span><span class="corner c-tr"></span><span class="corner c-bl"></span><span class="corner c-br"></span>
+      <div class="p-head"><h2 id="ic-diag">Diagnostics</h2><span class="meta" id="diag-meta">not scanned</span></div>
+      <div class="p-body">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:11px">
+          <div style="position:relative;width:78px;height:78px;flex:none">
+            <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="8"/>
+              <circle id="diag-ring" cx="50" cy="50" r="42" fill="none" stroke="url(#dgg)" stroke-width="8" stroke-linecap="round" stroke-dasharray="0 264" style="transition:stroke-dasharray .7s"/>
+              <defs><linearGradient id="dgg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="60%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#f43f5e"/></linearGradient></defs>
+            </svg>
+            <div style="position:absolute;inset:0;display:grid;place-items:center"><b id="diag-score" style="font-family:var(--disp);font-size:15px">—</b></div>
+          </div>
+          <div style="flex:1">
+            <p class="note" style="letter-spacing:.25em">OVERALL HEALTH</p>
+            <p id="diag-verdict" style="font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.15em;color:var(--dim)">NOT SCANNED</p>
+          </div>
+          <button class="btn sm ghost" id="btn-diag">Run</button>
+        </div>
+        <div id="diag-list"></div>
+      </div>
+    </section>
   </div>
-</section>
 </main>
 
-<footer class="relative z-10 text-center mono text-[.6rem] text-slate-600 tracking-[.25em] pb-6">
-  ONE BRAIN · ONE STATE · DISCOVERED TOOLS · SAFE HEALING · NO FAKE SUCCESS
+<footer>
+  <div class="foot">
+    <span>Fail-closed auth · JSON-only persistence · FloodWait compliant · zero secrets in DOM</span>
+    <span>./devil-jarvis v3.1 · python main.py ▸ 0.0.0.0:$PORT · NPT</span>
+  </div>
 </footer>
 
-<!-- ACCOUNT MODAL -->
-<div id="accountModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-  <div class="hud-panel w-[min(30rem,94vw)] p-5 fade-in">
-    <div class="flex items-center justify-between mb-4">
-      <div class="hud-title">Account</div>
-      <button id="accModalClose" class="btn text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-4 h-4"></i></button>
-    </div>
-    <div class="flex gap-1.5 mb-4 mono text-[.6rem]">
-      <button data-tab="creds" class="acc-tab px-2.5 py-1.5 rounded-md border border-cyan-400/40 text-cyan-300">SETUP</button>
-      <button data-tab="login" class="acc-tab px-2.5 py-1.5 rounded-md border border-slate-700 text-slate-400">PHONE LOGIN</button>
-      <button data-tab="session" class="acc-tab px-2.5 py-1.5 rounded-md border border-slate-700 text-slate-400">SESSION IMPORT</button>
-    </div>
-    <div data-pane="creds" class="space-y-3">
-      <input id="accLabel" placeholder="Label (e.g. Main Ops)" class="input-hud w-full rounded-lg px-3 py-2.5 mono text-xs outline-none">
-      <div class="grid grid-cols-2 gap-3">
-        <input id="accApiId" placeholder="API ID (optional if env set)" class="input-hud rounded-lg px-3 py-2.5 mono text-xs outline-none">
-        <input id="accApiHash" type="password" placeholder="API HASH (optional)" class="input-hud rounded-lg px-3 py-2.5 mono text-xs outline-none">
-      </div>
-      <button id="accCreate" class="btn w-full py-2.5 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-200 mono text-xs hover:bg-cyan-400/25">CREATE ACCOUNT</button>
-      <p class="text-[.6rem] mono text-slate-500">Secrets live server-side only (data/, chmod 600) and never return to this UI.</p>
-    </div>
-    <div data-pane="login" class="space-y-3 hidden">
-      <select id="loginAccount" class="input-hud w-full rounded-lg px-3 py-2.5 mono text-xs outline-none"></select>
-      <div class="flex gap-2">
-        <input id="loginPhone" placeholder="+91xxxxxxxxxx" class="input-hud flex-1 rounded-lg px-3 py-2.5 mono text-xs outline-none">
-        <button id="loginSend" class="btn px-4 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-200 mono text-xs hover:bg-cyan-400/25">SEND CODE</button>
-      </div>
-      <div class="flex gap-2">
-        <input id="loginCode" placeholder="Code" class="input-hud flex-1 rounded-lg px-3 py-2.5 mono text-xs outline-none">
-        <input id="loginPassword" type="password" placeholder="2FA password (if set)" class="input-hud flex-1 rounded-lg px-3 py-2.5 mono text-xs outline-none">
-        <button id="loginComplete" class="btn px-4 rounded-lg bg-emerald-400/15 border border-emerald-400/50 text-emerald-200 mono text-xs hover:bg-emerald-400/25">LOGIN</button>
-      </div>
-    </div>
-    <div data-pane="session" class="space-y-3 hidden">
-      <select id="sessionAccount" class="input-hud w-full rounded-lg px-3 py-2.5 mono text-xs outline-none"></select>
-      <textarea id="sessionString" rows="3" placeholder="Telethon StringSession (stored securely server-side, never returned)"
-                class="input-hud w-full rounded-lg px-3 py-2.5 mono text-xs outline-none resize-none"></textarea>
-      <button id="sessionImport" class="btn w-full py-2.5 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-200 mono text-xs hover:bg-cyan-400/25">IMPORT & CONNECT</button>
-    </div>
-  </div>
-</div>
-
-<!-- MAIN-CHANNEL CONFIG MODAL -->
-<div id="configModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-  <div class="hud-panel w-[min(30rem,94vw)] p-5 fade-in">
-    <div class="flex items-center justify-between mb-4">
-      <div class="hud-title">Main Channels — single source of truth</div>
-      <button id="configModalClose" class="btn text-slate-400 hover:text-slate-200"><i data-lucide="x" class="w-4 h-4"></i></button>
-    </div>
-    <p class="mono text-[.6rem] text-slate-500 mb-3" id="configFor"></p>
-    <textarea id="configChannels" rows="5" placeholder="One per line: -100... id, bare numeric id, or @username"
-              class="input-hud w-full rounded-lg px-3 py-2.5 mono text-xs outline-none resize-none"></textarea>
-    <div id="configNotes" class="mono text-[.6rem] text-amber-400/80 mt-2 space-y-0.5"></div>
-    <button id="configSave" class="btn mt-3 w-full py-2.5 rounded-lg bg-cyan-400/15 border border-cyan-400/50 text-cyan-200 mono text-xs hover:bg-cyan-400/25">SAVE CONFIGURATION</button>
-  </div>
-</div>
-
-<div id="toastWrap" class="fixed bottom-5 right-5 z-50 space-y-2 w-80"></div>
-
 <script>
+/* ============================================================================
+   DEVIL JARVIS — frontend controller (vanilla JS, real API integration)
+   ============================================================================ */
+'use strict';
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let STATE = null, BOOTED = false, CONFIRM_ACCOUNT = null, CURRENT_PLAN = null, TOOLS_CACHE = [], FOLDERS_CACHE = [];
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+/* ---------------- session-scoped state (token never localStorage) ---------------- */
+const makeSid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : 'sid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+const S = {
+  sid: sessionStorage.getItem('jv_sid') || (() => { const v = makeSid(); sessionStorage.setItem('jv_sid', v); return v; })(),
+  token: sessionStorage.getItem('jv_tok') || '',
+  auth: false,
+  up: false,          // backend reachable
+  status: null,
+  busy: false,
+  confirmUntil: 0,
+  loginId: null,
+};
+
+/* ---------------- API layer ---------------- */
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers||{}) }});
-  try { return await res.json(); } catch { return { ok:false, error:"bad response" }; }
-}
-function toast(msg, ok = true) {
-  const el = document.createElement("div");
-  el.className = `fade-in hud-panel p-3 mono text-[.65rem] flex items-start gap-2 ${ok ? "border-emerald-400/40" : "border-rose-400/40"}`;
-  el.innerHTML = `<i data-lucide="${ok ? "check-circle-2" : "alert-triangle"}" class="w-3.5 h-3.5 mt-0.5 ${ok?"text-emerald-300":"text-rose-300"}"></i><span class="flex-1">${esc(msg)}</span>`;
-  $("toastWrap").appendChild(el);
-  lucide.createIcons();
-  setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity .4s"; setTimeout(()=>el.remove(), 400); }, 4200);
-}
-
-const bootLines = ["> json persistence ... OK", "> NLU + AI decision layer ... OK",
-  "> tool registry discovery ... OK", "> reply/folder/entity resolvers ... OK",
-  "> task/monitor/cross engines ... OK", "> healing center armed ... OK", "> uplink ..."];
-function runBoot() {
-  let i = 0;
-  const t = setInterval(() => {
-    if (i < bootLines.length) {
-      const d = document.createElement("div");
-      d.textContent = bootLines[i]; d.className = "fade-in";
-      $("bootLog").appendChild(d);
-      $("bootBar").style.width = (8 + (i+1)/bootLines.length * 82) + "%";
-      i++;
-    } else clearInterval(t);
-  }, 200);
-}
-
-const KIND_ICON = { cross:"repeat", monitor:"radar", delete:"trash-2", forward_bulk:"send" };
-function btn(label, icon, cls, onclick) {
-  return `<button onclick="${onclick}" class="btn text-[.6rem] mono px-2 py-1 rounded-md border ${cls} flex items-center gap-1"><i data-lucide="${icon}" class="w-3 h-3"></i>${label}</button>`;
-}
-const ACTIVE_STATES = ["RUNNING","MONITORING","PLANNING","WAITING","PAUSED","FAILED","EXPIRED"];
-
-function renderOverview(s) {
-  $("statJarvis").textContent = "ONLINE"; $("statJarvisSub").textContent = "uptime " + fmtDur(s.uptime_sec);
-  const auths = s.accounts.filter(a=>a.authorized).length;
-  $("statTg").textContent = auths ? `${auths} ONLINE` : "OFFLINE";
-  $("statTg").className = "mono text-lg mt-1 " + (auths ? "text-emerald-300" : "text-slate-500");
-  $("statTgSub").textContent = s.telethon ? `${s.accounts.length} account(s)` : "telethon missing";
-  const conf = (s.ai?.providers||[]).filter(p=>p.configured).length;
-  $("statAI").textContent = conf ? `${conf} READY` : "LOCAL NLU";
-  $("statAI").className = "mono text-lg mt-1 " + (conf ? "text-violet-300" : "text-amber-300");
-  $("statAISub").textContent = conf ? `active: ${s.ai.active || "—"}` : "no keys configured";
-  $("statAccounts").textContent = s.accounts.length;
-  $("statAccountsSub").textContent = `${auths} authorized`;
-  const activeTasks = s.tasks.filter(t=>["RUNNING","MONITORING","PLANNING"].includes(t.status)).length;
-  $("statTasks").textContent = activeTasks;
-  $("statMonitors").textContent = s.monitors.length;
-  $("statSchedules").textContent = s.schedules.length;
-  const errs = (s.diag.events||[]).filter(e=>["ERROR","WARN"].includes(e.level)).length;
-  $("statErrors").textContent = errs;
-  $("statErrors").className = "mono text-lg mt-1 " + (errs ? "text-rose-300" : "text-emerald-300");
-  $("statErrorsSub").textContent = s.diag.last_failure ? "see diagnostics" : "none";
-}
-
-function renderAccounts(s) {
-  const sel = $("goalAccount"), keep = sel.value;
-  sel.innerHTML = `<option value="">AUTO</option>` + s.accounts.map((a, i) =>
-    `<option value="${a.account_id}" ${keep===a.account_id?"selected":""}>ACC ${i+1} · ${esc(a.label)}</option>`).join("");
-  if (!s.accounts.length) {
-    $("accountsList").innerHTML = `<div class="mono text-[.65rem] text-slate-500 border border-dashed border-slate-700 rounded-lg p-4 text-center leading-relaxed">NO ACCOUNTS YET<br><span class="text-cyan-500/80">web starts without telegram creds — add one here</span></div>`;
-    return;
-  }
-  $("accountsList").innerHTML = s.accounts.map((a, i) => {
-    const state = a.authorized ? "on" : (a.connected ? "warn" : "off");
-    const stateTxt = a.authorized ? "AUTHORIZED" : (a.connected ? "NOT AUTH" : "OFFLINE");
-    return `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-3 fade-in">
-      <div class="flex items-center gap-2">
-        <span class="dot ${state}"></span>
-        <span class="mono text-xs text-slate-200 flex-1 truncate">${i+1}. ${esc(a.label)}</span>
-        <span class="badge ${a.authorized ? "st-RUNNING" : a.connected ? "st-PAUSED" : ""}">${stateTxt}</span>
-      </div>
-      <div class="mono text-[.6rem] text-slate-500 mt-1.5 truncate">${esc(a.self_name || a.phone_masked || "—")} ${a.self_username?("@"+esc(a.self_username)):""} ${a.self_tg_id?("· "+a.self_tg_id):""} · api:${a.api_mode}</div>
-      <div class="flex items-center justify-between mt-2">
-        <span class="mono text-[.6rem] text-cyan-400/70">${a.main_channels.length} main ch · ${a.known_channels} known</span>
-        <button onclick="openConfig('${a.account_id}')" class="btn text-[.6rem] mono text-cyan-300/80 hover:text-cyan-200 flex items-center gap-1"><i data-lucide="settings-2" class="w-3 h-3"></i>CONFIG</button>
-      </div>
-      ${a.last_error ? `<div class="mono text-[.58rem] text-rose-400/70 mt-1 truncate">${esc(a.last_error)}</div>` : ""}
-      <div class="flex gap-1.5 mt-2.5 flex-wrap">
-        ${btn("CONNECT","plug-zap","border-cyan-400/30 text-cyan-300 hover:bg-cyan-400/10", `accConnect('${a.account_id}')`)}
-        ${btn("LOGIN","key-round","border-violet-400/30 text-violet-300 hover:bg-violet-400/10", `openLogin('${a.account_id}')`)}
-        ${btn("DOWN","unplug","border-slate-600 text-slate-400 hover:bg-slate-700/30", `accDisconnect('${a.account_id}')`)}
-        ${btn("DEL","trash-2","border-rose-400/30 text-rose-300 hover:bg-rose-400/10", `accDelete('${a.account_id}')`)}
-      </div>
-    </div>`;
-  }).join("");
-}
-
-function renderTasks(s) {
-  const list = s.tasks.filter(t => ACTIVE_STATES.includes(t.status));
-  if (!list.length) { $("tasksList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-4">REGISTRY EMPTY</div>`; return; }
-  $("tasksList").innerHTML = list.map(t => {
-    const prog = t.progress || {}, counters = prog.counters || {};
-    const delivered = Object.values(counters).reduce((a,c)=>a+(c&&c.sent?c.sent:0),0);
-    const verified = Object.values(counters).reduce((a,c)=>a+(c&&c.verified?c.verified:0),0);
-    const acts =
-      (["RUNNING","MONITORING","PLANNING"].includes(t.status) ? btn("PAUSE","pause","border-amber-400/30 text-amber-300 hover:bg-amber-400/10",`taskAction('${t.task_id}','pause')`) : "") +
-      (t.status==="PAUSED" ? btn("RESUME","play","border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10",`taskAction('${t.task_id}','resume')`) : "") +
-      (["FAILED","WAITING","EXPIRED","PAUSED","STOPPED"].includes(t.status) ? btn("RETRY","rotate-ccw","border-cyan-400/30 text-cyan-300 hover:bg-cyan-400/10",`taskAction('${t.task_id}','retry')`) : "") +
-      (["RUNNING","MONITORING","PAUSED","PLANNING"].includes(t.status) ? btn("STOP","square","border-rose-400/30 text-rose-300 hover:bg-rose-400/10",`taskAction('${t.task_id}','stop')`) : "");
-    return `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5 fade-in">
-      <div class="flex items-center gap-2">
-        <i data-lucide="${KIND_ICON[t.kind]||"box"}" class="w-3.5 h-3.5 text-cyan-300/80"></i>
-        <span class="mono text-[.65rem] text-slate-300 flex-1 truncate">${esc(t.kind)} · ${esc(t.source_title || t.goal || "—").slice(0,26)}</span>
-        <span class="badge st-${t.status}">${t.status}</span>
-      </div>
-      <div class="mono text-[.58rem] text-slate-500 mt-1 flex gap-2 flex-wrap">
-        <span>${esc(t.short_id)}</span>
-        ${t.targets ? `<span>→ ${t.targets} tgts</span>` : ""}
-        ${delivered ? `<span class="text-emerald-400/70">delivered ${delivered}${verified?` · verified ${verified}`:""}</span>` : ""}
-        ${t.error_count ? `<span class="text-rose-400/80">err ${t.error_count}</span>` : ""}
-        ${t.end_time ? `<span>ends ${esc(t.end_time.slice(0,14))}</span>` : ""}
-      </div>
-      ${t.current_action ? `<div class="mono text-[.56rem] text-cyan-400/60 mt-1 truncate">now: ${esc(t.current_action)}</div>` : ""}
-      ${t.next_action ? `<div class="mono text-[.56rem] text-slate-500 mt-0.5 truncate">next: ${esc(t.next_action)}</div>` : ""}
-      ${t.last_error ? `<div class="mono text-[.56rem] text-rose-400/70 mt-1 truncate">${esc(t.last_error_code? "["+t.last_error_code+"] ":"")}${esc(t.last_error)}</div>` : ""}
-      ${acts ? `<div class="flex gap-1.5 mt-2 flex-wrap">${acts}</div>` : ""}
-    </div>`;
-  }).join("");
-}
-
-function renderMonitors(s) {
-  if (!s.monitors.length) { $("monitorsList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-4">NO ACTIVE MONITORS</div>`; return; }
-  $("monitorsList").innerHTML = s.monitors.map(m => `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5 fade-in">
-    <div class="flex items-center gap-2">
-      <i data-lucide="radar" class="w-3.5 h-3.5 text-violet-300/80 animate-pulse"></i>
-      <span class="mono text-[.65rem] text-slate-300 flex-1 truncate">${esc(m.title)}</span>
-      <span class="badge st-RUNNING">${esc(m.condition)}</span>
-    </div>
-    <div class="mono text-[.58rem] text-slate-500 mt-1 flex gap-2 flex-wrap">
-      <span>${esc(m.action||"alert_only")}</span><span>hits ${m.hits||0}</span><span>last #${m.last_processed_id||0}</span>
-      <span>until ${esc((m.end_ktm||"").slice(0,17))}</span>
-    </div>
-    <div class="mt-2">${btn("STOP","square","border-rose-400/30 text-rose-300 hover:bg-rose-400/10",`monStop('${m.monitor_id}')`)}</div>
-  </div>`).join("");
-}
-
-function renderSchedules(s) {
-  if (!s.schedules.length) { $("schedulesList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-4">QUEUE EMPTY</div>`; return; }
-  $("schedulesList").innerHTML = s.schedules.map(sc => `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5 fade-in">
-    <div class="mono text-[.65rem] text-slate-300 truncate">${esc(sc.payload.type)} ${sc.payload.text?("· "+esc(sc.payload.text.slice(0,38))):""}</div>
-    <div class="mono text-[.58rem] text-cyan-400/70 mt-1">fires ${esc((sc.run_at_ktm||"").slice(0,20))}</div>
-    <div class="mt-2">${btn("CANCEL","x-circle","border-rose-400/30 text-rose-300 hover:bg-rose-400/10",`schedCancel('${sc.schedule_id}')`)}</div>
-  </div>`).join("");
-}
-
-function renderDiag(s) {
-  const evs = (s.diag.events||[]).slice(-60).reverse();
-  $("diagLog").innerHTML = evs.map(e =>
-    `<div class="flex gap-2"><span class="text-slate-600 shrink-0">${esc(e.ts.slice(11,19))}</span>
-     <span class="diag-${e.level} shrink-0 w-12">${e.level}</span>
-     <span class="text-cyan-300/70 shrink-0">${esc(e.component)}.${esc(e.operation)}</span>
-     <span class="text-slate-400 break-all">${e.error_code?`[${esc(e.error_code)}] `:""}${esc(e.message)}</span></div>`).join("");
-  const ls = s.diag.last_success, lf = s.diag.last_failure;
-  $("lastSuccess").textContent = ls ? `OK ${ls.component}.${ls.operation}` : "OK —";
-  $("lastFail").textContent = lf ? `ERR ${lf.component}.${lf.operation}` : "ERR —";
-  $("persistRow").innerHTML = Object.entries(s.persistence).map(([k,v]) =>
-    `<span class="badge ${v?"st-RUNNING":"st-FAILED"}">${k}</span>`).join("");
-  $("limitsRow").textContent = `limits · tasks ${s.limits.tasks} · monitors ${s.limits.monitors} · schedules ${s.limits.schedules} · ctx TTL 30m · confirmations 90s`;
-}
-
-function renderChannels(s) {
-  const accs = s.accounts;
-  if (!accs.length) { $("channelsList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-4">NO ACCOUNTS</div>`; return; }
-  const rows = [];
-  accs.forEach((a, ai) => {
-    rows.push(`<div class="mono text-[.58rem] tracking-[.15em] text-cyan-500/70 mt-1">${esc(a.label).toUpperCase()} — ${a.main_channels.length} main channel(s)</div>`);
-    if (!a.main_channels.length) rows.push(`<div class="mono text-[.6rem] text-slate-600">none configured — set via CONFIG or chat</div>`);
-    a.main_channels.forEach(c => {
-      const key = `${a.account_id}:${c.id}`;
-      rows.push(`<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5">
-        <div class="flex items-center gap-2 flex-wrap">
-          <i data-lucide="tv" class="w-3.5 h-3.5 text-cyan-300/70"></i>
-          <span class="mono text-[.65rem] text-slate-200 flex-1 truncate">${esc(c.title||"?")} <span class="text-slate-500">[${c.id}]</span>${c.username?(" @"+esc(c.username)):""}</span>
-          <button onclick="channelLatest('${a.account_id}','${c.id}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">LATEST</button>
-          <button onclick="channelInspect('${a.account_id}','${c.id}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-violet-400/40 text-violet-300 hover:bg-violet-400/10">INSPECT</button>
-        </div>
-        <div id="ch-${cssSafe(key)}" class="mono text-[.58rem] text-slate-500 mt-1 whitespace-pre-wrap"></div>
-      </div>`);
-    });
-  });
-  $("channelsList").innerHTML = rows.join("");
-  lucide.createIcons();
-}
-function cssSafe(s){ return s.replace(/[^a-z0-9]/gi, "_"); }
-
-window.channelLatest = async (aid, ref) => {
-  const el = $("ch-" + cssSafe(`${aid}:${ref}`));
-  if (el) el.textContent = "fetching latest (read-only)…";
-  const r = await api("/api/channels/latest", { method:"POST", body: JSON.stringify({ aid, ref }) });
-  const txt = (r.ok && r.data)
-    ? `#${r.data.message_id} · ${(r.data.date_ktm||"").slice(0,17)}\n"${(r.data.text||"[media]").slice(0,140)}"${r.data.has_media ? " +media" : ""}`
-    : `FAILED [${r.error_code||""}] ${r.error||"error"}`;
-  if (el) el.textContent = txt;
-  if (r.ok) addMsg("jarvis", `LATEST POST [${r.data.entity}]\nMessage #${r.data.message_id} · ${r.data.date_ktm}\n"${r.data.text || "[media]"}"`, "SUCCESS");
-};
-window.channelInspect = async (aid, ref) => {
-  const el = $("ch-" + cssSafe(`${aid}:${ref}`));
-  if (el) el.textContent = "inspecting…";
-  const r = await api("/api/channels/inspect", { method:"POST", body: JSON.stringify({ aid, ref }) });
-  if (el) el.textContent = (r.ok && r.data)
-    ? `${r.data.kind} · members ${r.data.participants ?? "?"} · admin ${r.data.rights?.is_admin ? "yes" : "no/?"} · sampled ${r.data.message_count_sampled}`
-    : `FAILED [${r.error_code||""}] ${r.error||"error"}`;
-};
-
-async function loadFolders(force) {
-  $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-3">loading…</div>`;
-  const r = await api("/api/folders");
-  if (!r.ok) { $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-rose-400/70 text-center py-3">${esc(r.error||"needs authorized account")}</div>`; return; }
-  FOLDERS_CACHE = (r.data?.folders) || [];
-  if (!FOLDERS_CACHE.length) { $("foldersList").innerHTML = `<div class="mono text-[.6rem] text-slate-600 text-center py-3">no telegram folders on this account</div>`; return; }
-  $("foldersList").innerHTML = FOLDERS_CACHE.map(f =>
-    `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-2.5 flex items-center gap-2 fade-in">
-      <i data-lucide="folder" class="w-3.5 h-3.5 text-amber-300/80"></i>
-      <span class="mono text-[.65rem] text-slate-200 flex-1 truncate">${esc(f.title)} <span class="text-slate-500">(${f.peer_count} chats)</span></span>
-      <button onclick="folderInspect(decodeURIComponent('${encodeURIComponent(f.title)}'))" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-amber-400/40 text-amber-300 hover:bg-amber-400/10">INSPECT</button>
-    </div>`).join("");
-  lucide.createIcons();
-}
-window.folderInspect = async (name) => {
-  $("foldersDetail").innerHTML = `<div class="text-slate-600">resolving real folder peers…</div>`;
-  const r = await api("/api/folders/inspect", { method:"POST", body: JSON.stringify({ name }) });
-  if (!r.ok) { $("foldersDetail").innerHTML = `<div class="text-rose-400/80">[${esc(r.error_code||"")}] ${esc(r.error||"failed")}</div>`; return; }
-  const d = r.data, lines = [`FOLDER '${d.title}' — ${d.total_peers} chat(s), no substitutions`];
-  (d.channels||[]).forEach(c => lines.push(`  [channel] ${c.title} [${c.id}]${c.username?(" @"+c.username):""}`));
-  (d.groups||[]).forEach(g => lines.push(`  [group] ${g.title} [${g.id}]`));
-  (d.users||[]).forEach(u => lines.push(`  [user] ${u.title} [${u.id}]`));
-  (d.unresolved||[]).forEach(u => lines.push(`  [unresolved] ${u.id}`));
-  $("foldersDetail").innerHTML = lines.map(l => `<div>${esc(l)}</div>`).join("");
-};
-
-function renderAI(s) {
-  const ai = s.ai;
-  if (!ai || !(ai.providers||[]).length) {
-    $("aiProviders").innerHTML = `<div class="mono text-[.62rem] text-slate-600 text-center py-4">NO PROVIDERS IN ORDER LIST</div>`;
-    return;
-  }
-  $("aiProviders").innerHTML = ai.providers.map(p => {
-    const st = p.configured ? (p.active ? "RUNNING" : "WAITING") : "STOPPED";
-    const stTxt = p.configured ? (p.active ? "ACTIVE" : "CONFIGURED") : "NOT CONFIGURED";
-    return `<div class="rounded-lg border border-slate-700/60 bg-black/20 p-3 fade-in">
-      <div class="flex items-center gap-2">
-        <span class="dot ${p.configured ? "on" : "off"}"></span>
-        <span class="mono text-xs text-slate-200 flex-1">${esc(p.name)}</span>
-        <span class="badge st-${st}">${stTxt}</span>
-      </div>
-      <div class="mono text-[.58rem] text-slate-500 mt-1.5 space-y-0.5">
-        <div>model: ${esc(p.model || "not set")}</div>
-        ${p.last_success ? `<div>last success: ${esc(p.last_success.slice(5,19))}</div>` : ""}
-        ${p.last_error ? `<div class="text-rose-400/70 truncate" title="${esc(p.last_error)}">last error: ${esc(p.last_error)}</div>` : ""}
-      </div>
-    </div>`;
-  }).join("");
-}
-
-function renderConfirm(s) {
-  const banner = $("confirmBanner");
-  if (s.confirmations.length) {
-    CONFIRM_ACCOUNT = s.confirmations[0].account_id;
-    banner.classList.remove("hidden");
-    $("confirmText").textContent = `CONFIRMATION REQUIRED (${s.confirmations[0].expires_in}s): ${s.confirmations[0].desc}`;
-  } else { banner.classList.add("hidden"); CONFIRM_ACCOUNT = null; }
-}
-
-function renderAll(s) {
-  STATE = s;
-  renderOverview(s); renderAccounts(s); renderTasks(s); renderMonitors(s);
-  renderSchedules(s); renderDiag(s); renderConfirm(s); renderChannels(s); renderAI(s);
-  $("uptime").textContent = fmtDur(s.uptime_sec);
-  $("pillTelethon").innerHTML = `<span class="dot ${s.telethon?"on":"off"}"></span>TELETHON`;
-  $("pillAI").innerHTML = `<span class="dot ${s.ai?.any_configured?"on":"warn"}"></span>AI ${s.ai?.active || "LOCAL"}`;
-  $("pillTools").textContent = `TOOLS ${s.tools_summary.enabled}/${s.tools_summary.total}`;
-  lucide.createIcons();
-}
-function fmtDur(sec){ sec=Math.floor(sec); if(sec<60)return sec+"s"; if(sec<3600)return Math.floor(sec/60)+"m"; if(sec<86400)return Math.floor(sec/3600)+"h"; return Math.floor(sec/86400)+"d"; }
-
-/* toolbox */
-async function loadTools() {
-  const r = await api("/api/tools");
-  if (!r.ok) return;
-  TOOLS_CACHE = r.tools;
-  renderTools();
-}
-function toolFlags(t) {
-  const f = [];
-  f.push(`<span class="badge ${t.read_only?"text-sky-300 border-sky-400/30":"text-violet-300 border-violet-400/30"}">${t.read_only?"READ":"WRITE"}</span>`);
-  if (t.destructive) f.push(`<span class="badge text-rose-300 border-rose-400/30">DESTRUCTIVE</span>`);
-  if (t.confirmation_required) f.push(`<span class="badge text-amber-300 border-amber-400/30">CONFIRM</span>`);
-  if (t.supports_background_task) f.push(`<span class="badge text-emerald-300 border-emerald-400/30">BG</span>`);
-  return f.join(" ");
-}
-function renderTools() {
-  const fl = ($("toolFilter").value || "").toLowerCase();
-  const tools = TOOLS_CACHE.filter(t => !fl || t.name.includes(fl) || t.category.includes(fl) || t.description.toLowerCase().includes(fl));
-  $("toolboxBody").innerHTML = tools.map(t => `<tr class="tool-row border-t border-slate-800/60">
-    <td class="py-2 pr-3 text-cyan-200">${esc(t.name)}</td>
-    <td class="py-2 pr-3 text-slate-400">${esc(t.category)}</td>
-    <td class="py-2 pr-3"><span class="badge st-${t.enabled ? (t.health||"ok") : "STOPPED"}">${t.enabled ? (t.health||"ok").toUpperCase() : "DISABLED"}</span></td>
-    <td class="py-2 pr-3 text-slate-400 max-w-[22rem]"><span class="block truncate" title="${esc(t.description)}">${esc(t.description)}</span>
-      ${t.permissions_required.length?`<span class="text-[.55rem] text-slate-600">perms: ${esc(t.permissions_required.join(", "))}</span>`:""}</td>
-    <td class="py-2 pr-3"><div class="flex flex-wrap gap-1">${toolFlags(t)}</div></td>
-    <td class="py-2 pr-3 text-slate-500">${t.last_used?esc(t.last_used.slice(5,19)):"never"} <span class="text-slate-700">(${t.use_count}x)</span></td>
-    <td class="py-2 pr-3 text-rose-400/70 max-w-[10rem]"><span class="block truncate" title="${esc(t.last_error||"")}">${esc(t.last_error||"—")}</span></td>
-    <td class="py-2 pr-3"><div class="flex gap-2 justify-end items-center">
-      ${t.testable?`<button onclick="toolTest('${t.name}')" class="btn text-[.58rem] mono px-2 py-1 rounded-md border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">TEST</button>`:`<span class="badge text-slate-600" title="destructive/write tools are confirmed, never free-tested">LOCKED</span>`}
-      <div class="switch ${t.enabled?"on":""}" onclick="toolToggle('${t.name}', ${!t.enabled})"></div>
-    </div></td>
-  </tr>`).join("");
-  lucide.createIcons();
-}
-$("toolFilter").addEventListener("input", renderTools);
-$("toolsRefresh").onclick = async () => { await api("/api/tools/refresh", {method:"POST"}); await loadTools(); toast("tool registry refreshed"); };
-window.toolToggle = async (name, enabled) => {
-  const r = await api(`/api/tools/${name}/toggle`, {method:"POST", body: JSON.stringify({enabled})});
-  toast(r.ok ? `${name} ${enabled?"enabled":"disabled"}` : (r.error||"failed"), !!r.ok);
-  loadTools();
-};
-window.toolTest = async (name) => {
-  const r = await api(`/api/tools/${name}/test`, {method:"POST"});
-  if (r.ok) { toast(`${name}: OK`, true); addMsg("jarvis", `TOOL TEST [${name}] → SUCCESS\n${JSON.stringify(r.data||{}, null, 1).slice(0,600)}`, "SUCCESS"); }
-  else { toast(`${name}: ${r.error||"failed"}`, false); addMsg("jarvis", `TOOL TEST [${name}] → FAILED [${r.error_code||""}] ${r.error||""}`, "FAILED"); }
-  loadTools();
-};
-
-/* heal */
-$("btnSelftest").onclick = async () => {
-  $("healLog").innerHTML = `<div class="text-slate-600">running offline diagnostics suite…</div>`;
-  const r = await api("/api/selftest", { method:"POST" });
-  if (!r.results) { $("healLog").innerHTML = `<div class="text-rose-400/80">selftest unavailable</div>`; return; }
-  $("selftestTable").innerHTML = r.results.map(x =>
-    `<div class="rounded-md border ${x.pass?"border-emerald-400/25 bg-emerald-400/5":"border-rose-400/25 bg-rose-400/5"} p-2">
-      <div class="flex items-center gap-2"><span class="badge st-${x.pass?"PASS":"FAIL"}">${x.pass?"PASS":"FAIL"}</span>
-      <span class="mono text-[.62rem] text-slate-200 flex-1 truncate">${esc(x.name)}</span></div>
-      ${x.detail?`<div class="mono text-[.55rem] text-slate-500 mt-1 truncate" title="${esc(x.detail)}">${esc(x.detail)}</div>`:""}
-    </div>`).join("");
-  $("healLog").innerHTML = `<div class="diag-${r.ok?"SUCCESS":"ERROR"}">SELFTEST: ${r.pass} passed, ${r.fail} failed of ${r.total}</div>`;
-  lucide.createIcons();
-};
-$("btnHeal").onclick = async () => {
-  $("healLog").innerHTML = `<div class="text-slate-600">applying safe predefined repairs…</div>`;
-  const r = await api("/api/heal", { method:"POST" });
-  if (!r.ok) { $("healLog").innerHTML = `<div class="text-rose-400/80">[${esc(r.error_code||"")}] ${esc(r.error||"heal failed")}</div>`; return; }
-  const ops = (r.data?.ops)||[];
-  $("healLog").innerHTML = ops.map(o => `<div><span class="text-cyan-400/70">heal.${esc(o.op)}</span> — ${esc(o.detail)}</div>`).join("")
-    + `<div class="text-emerald-400/80 mt-1">healing complete · ${ops.length} operations · no secrets touched</div>`;
-  poll(true);
-};
-
-/* polling */
-async function poll(force) {
+  const headers = {'Content-Type': 'application/json', 'X-Session-Id': S.sid};
+  if (opts.auth && S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  let res;
   try {
-    const s = await api("/api/status");
-    if (s.ok) {
-      renderAll(s);
-      if (!BOOTED) {
-        BOOTED = true;
-        $("bootBar").style.width = "100%";
-        setTimeout(() => { $("boot").style.opacity = "0"; setTimeout(()=>$("boot").remove(), 800); }, 350);
-        addMsg("jarvis", "YES SIR. Production systems online.\nVerified AI brain + toolbox + healing center armed. Describe goals naturally — preview plans before executing.", "SUCCESS");
-        loadTools(); loadFolders();
-      } else if (force) { loadFolders(); }
+    res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch (e) {
+    const err = new Error('NETWORK ERROR — backend unreachable'); err.net = true; throw err;
+  }
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON */ }
+  if (!res.ok) { const err = new Error(data.error || ('HTTP ' + res.status)); err.status = res.status; throw err; }
+  return data;
+}
+
+/* ---------------- toasts ---------------- */
+function toast(kind, msg) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; setTimeout(() => el.remove(), 420); }, 4200);
+}
+
+/* ---------------- terminal ---------------- */
+function term(kind, text) {
+  const p = document.createElement('p');
+  p.className = 't-' + kind;
+  p.textContent = text;
+  const t = $('term');
+  const caret = t.querySelector('.caretline'); if (caret) caret.remove();
+  t.appendChild(p);
+  const c = document.createElement('p');
+  c.className = 'caretline'; c.innerHTML = '<span class="caret"></span>';
+  t.appendChild(c);
+  while (t.children.length > 320) t.removeChild(t.firstChild);
+  t.scrollTop = t.scrollHeight;
+}
+async function termLines(kind, lines) {
+  for (const ln of (lines || [])) { term(kind, ln); await new Promise(r => setTimeout(r, 14)); }
+}
+function busy(on) {
+  S.busy = on;
+  $('btn-exec').disabled = on || !S.auth;
+  $('console-meta').textContent = on ? 'PROCESSING' : 'READY';
+}
+
+/* ---------------- help / errors of controls ---------------- */
+function showErr(id, msg) {
+  const el = $(id);
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.textContent = msg; el.classList.remove('hidden');
+}
+
+/* ============================================================================
+   STATUS RENDERING — everything below reflects real backend data only
+   ============================================================================ */
+function pill(d, p, text, tone) { $(d).className = 'dot ' + tone; $(p).className = 'v ' + tone; $(p).textContent = text; }
+
+function renderStatus(st) {
+  S.status = st;
+  const tg = st.telegram || {};
+  const eng = st.engine || {};
+  const sched = st.scheduler || {};
+  const ai = st.ai || {};
+
+  pill('d-backend', 'p-backend', 'ONLINE', 'ok');
+  pill('d-telegram', 'p-telegram', tg.connected ? (tg.authorized ? 'CONNECTED' : 'UNAUTH') : 'OFFLINE', tg.authorized ? 'ok' : tg.connected ? 'warn' : 'dim');
+  pill('d-auth', 'p-auth', S.auth ? 'AUTHORIZED' : (st.auth_configured ? 'LOCKED' : 'UNSET'), S.auth ? 'ok' : st.auth_configured ? 'warn' : 'dim');
+  pill('d-ai', 'p-ai', ai.provider || 'LOCAL', ai.provider && ai.provider !== 'LOCAL' ? 'ok' : 'info');
+  pill('d-engine', 'p-engine', (eng.status || 'stopped').toUpperCase(), eng.status === 'running' ? 'ok' : 'dim');
+
+  /* ticker */
+  const floodS = eng.flood_wait_in ? eng.flood_wait_in + 's' : '—';
+  const items = [
+    ['ENGINE', (eng.status || 'stopped').toUpperCase(), eng.status === 'running' ? '#6ee7b7' : '#64748b'],
+    ['QUEUE', eng.queue ?? 0, '#67e8f9'], ['DEFERRED', eng.deferred ?? 0, '#fcd34d'],
+    ['PROCESSED', eng.processed ?? 0, '#6ee7b7'], ['FAILED', eng.failed ?? 0, '#fda4af'],
+    ['FLOODWAIT', floodS, eng.flood_wait_in ? '#fcd34d' : '#475569'],
+    ['SCHEDULER', (sched.active ?? 0) + ' ACTIVE', '#67e8f9'],
+    ['AI CALLS', ai.calls ?? 0, '#67e8f9'],
+    ['LAST CMD', (st.last_command || '—').slice(0, 26), '#94a3b8'],
+    ['LAST ERR', (st.last_error || 'NONE').slice(0, 26), st.last_error ? '#fda4af' : '#475569'],
+  ];
+  const half = items.map(([k, v, c]) => '<b>' + esc(k) + '</b><span style="color:' + c + '">' + esc(v) + '</span>').join('');
+  $('ticker').innerHTML = half + half;
+
+  /* account card + connection view */
+  renderAccount();
+  /* engine */
+  const total = (eng.queue || 0) + (eng.deferred || 0) + (eng.processed || 0);
+  const pct = total ? Math.round((eng.processed / total) * 100) : 0;
+  $('gauge-arc').setAttribute('stroke-dasharray', (pct / 100 * 264) + ' 264');
+  $('gauge-pct').textContent = pct + '%';
+  $('e-queue').textContent = eng.queue ?? 0;
+  $('e-deferred').textContent = eng.deferred ?? 0;
+  $('e-processed').textContent = eng.processed ?? 0;
+  $('e-failed').textContent = eng.failed ?? 0;
+  $('eng-state').textContent = (eng.status || 'stopped').toUpperCase();
+  $('e-event').textContent = 'LAST EVENT ▸ ' + (eng.last_event || '—');
+  $('e-meter').style.width = pct + '%';
+  $('btn-start').disabled = !S.auth || eng.status === 'running';
+  $('btn-stop').disabled = !S.auth || eng.status !== 'running';
+  $('btn-reset').disabled = !S.auth;
+  if (eng.flood_wait_in > 0) { $('e-flood').classList.remove('hidden'); $('e-flood').textContent = 'FLOODWAIT ▸ holding exact Telegram delay ' + eng.flood_wait_in + 's — bypass disabled by policy'; }
+  else $('e-flood').classList.add('hidden');
+  if (tg.connected && !eng.source_configured) { $('e-source-err').classList.remove('hidden'); $('e-source-err').textContent = 'SOURCE NOT AVAILABLE ▸ set SOURCE_CHAT_ID and SOURCE_MESSAGE_IDS env vars to enable cross-posting'; }
+  else $('e-source-err').classList.add('hidden');
+  /* queue depth hint */
+  $('e-queue-list').innerHTML = eng.queue > 0
+    ? '<p class="q-line"><span>targets pending delivery</span><b>' + eng.queue + ' — details via /cross status</b></p>' : '';
+
+  /* scheduler */
+  const jobs = (sched.jobs || []);
+  const act = jobs.filter(j => !j.done);
+  $('sched-meta').textContent = act.length + ' active · NPT';
+  $('jobs-empty').classList.toggle('hidden', jobs.length > 0);
+  const now = Date.now() / 1000;
+  $('jobs-list').innerHTML = jobs.slice(-6).reverse().map(j => {
+    const left = Math.max(0, Math.round(j.run_at - now));
+    const l = left >= 3600 ? Math.floor(left / 3600) + 'h ' + Math.floor(left % 3600 / 60) + 'm' : left >= 60 ? Math.floor(left / 60) + 'm ' + (left % 60) + 's' : left + 's';
+    return '<div class="job' + (j.done ? ' done' : '') + '"><div style="min-width:0"><p class="jt">[' + esc(j.id) + '] ' + esc(j.action) +
+      ' ENGINE <span style="color:#64748b">— ' + esc(j.label) + '</span></p><p class="js">' +
+      (j.done ? 'executed' : 'fires in ' + l) + '</p></div>' +
+      (j.done ? '' : '<button data-job="' + esc(j.id) + '" title="Cancel">✕</button>') + '</div>';
+  }).join('');
+  $('jobs-list').querySelectorAll('button[data-job]').forEach(b => b.onclick = () => cancelJob(b.dataset.job));
+
+  /* ai */
+  renderAI(ai);
+}
+
+function renderAI(ai) {
+  const chain = ['GROQ','GEMINI','OPENROUTER','ANTHROPIC','HUGGINGFACE','OPENAI'];
+  const conf = ai.configured || [];
+  const active = ai.provider || 'LOCAL';
+  const view = {};
+  (ai.providers || []).forEach(p => { view[p.id] = p; });
+  $('ai-chain').innerHTML = chain.map((n, i) => {
+    const isOn = active === n;
+    const cfg = conf.includes(n);
+    const pv = view[n];
+    const st = pv ? pv.status : (cfg ? 'idle' : 'skipped');
+    const failed = st && String(st).startsWith('FAIL');
+    return '<div class="ai-row' + (isOn ? ' on' : '') + '"><span class="dot ' + (isOn ? 'ok' : failed ? 'err' : cfg ? 'info' : 'dim') + '"></span>' +
+      '<b>' + n + '</b><small>' + (cfg ? 'key · ' + esc(st) : 'no key — skipped') + '</small>' +
+      '<em class="' + (i === 0 ? 'prim' : '') + '">' + (i === 0 ? 'primary' : 'fallback ' + i) + '</em></div>';
+  }).join('');
+  $('ai-active').textContent = active;
+  $('ai-conf').textContent = conf.length + '/6';
+  $('ai-total').textContent = ai.calls ?? 0;
+  $('ai-calls').textContent = (ai.calls ?? 0) + ' calls';
+}
+
+function renderAccount() {
+  const st = S.status, tg = st && st.telegram;
+  const acc = tg && tg.account;
+  const connected = tg && tg.connected;
+  /* connection card views */
+  $('conn-form').classList.toggle('hidden', !!connected);
+  $('conn-account').classList.toggle('hidden', !connected);
+  $('conn-meta').textContent = connected ? (tg.authorized ? 'AUTHORIZED' : 'CONNECTED') : 'MTProto';
+  if (connected && acc) {
+    $('conn-checks').innerHTML = ['Telegram Connected', 'Session Valid — OTP not required', 'Credentials never stored']
+      .map(s => '<p class="chk">✓ ' + s + '</p>').join('');
+    $('ca-name').textContent = acc.name || '—';
+    $('ca-user').textContent = '@' + (acc.username || 'unknown');
+    $('ca-id').textContent = acc.user_id || '—';
+    $('ca-state').textContent = tg.authorized ? 'AUTHORIZED' : 'CONNECTED (unverified)';
+  }
+  /* account panel */
+  if (connected && acc) {
+    const initials = (acc.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    $('acct-body').innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px"><div class="avatar">' + esc(initials) + '</div>' +
+      '<div style="min-width:0"><p style="font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(acc.name) + '</p>' +
+      '<p style="font-family:var(--mono);font-size:10px;color:#67e8f9">@' + esc(acc.username || 'unknown') + '</p></div></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:var(--mono);font-size:10px">' +
+      '<div style="border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:8px"><p class="l" style="font-size:8px;letter-spacing:.25em;color:var(--dim)">AUTHORIZATION</p><p style="color:#6ee7b7;font-weight:700;margin-top:2px">' + (tg.authorized ? 'VALID' : 'PENDING') + '</p></div>' +
+      '<div style="border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.3);border-radius:3px;padding:8px"><p class="l" style="font-size:8px;letter-spacing:.25em;color:var(--dim)">ADMIN SCOPE</p><p style="color:#a5f3fc;font-weight:700;margin-top:2px">ID ' + esc(String(acc.user_id)) + '</p></div></div>' +
+      '<p class="note" style="margin-top:10px">AUTHORIZED_ADMINS enforced — /AI commands are only honoured from this account\'s Saved Messages. Everyone else is ignored.</p>';
+  } else {
+    $('acct-body').innerHTML = '<p class="note">NO ACCOUNT ▸ connect with a session string or Phone + OTP to resolve identity and admin authorization. Status above is read live from the backend — nothing is hard-coded.</p>';
+  }
+}
+
+/* ============================================================================
+   POLLING — health gate + status
+   ============================================================================ */
+async function pollStatus() {
+  try {
+    const st = await api('/api/status');
+    if (!S.up) { S.up = true; $('offline').classList.add('hidden'); toast('ok', 'Backend online — JARVIS link established'); }
+    renderStatus(st);
+  } catch (e) {
+    S.up = false;
+    $('offline').classList.remove('hidden');
+    pill('d-backend', 'p-backend', 'OFFLINE', 'err');
+    pill('d-telegram', 'p-telegram', 'UNKNOWN', 'dim');
+  }
+}
+setInterval(pollStatus, 4000);
+
+/* logs + history (authorized only) */
+async function pollAudit() {
+  if (!S.auth || !S.up) return;
+  try {
+    const [lg, hs] = await Promise.all([api('/api/logs', {auth: true}), api('/api/history', {auth: true})]);
+    $('logs-meta').textContent = lg.logs.length + ' events';
+    const now = Date.now() / 1000;
+    $('logs-list').innerHTML = lg.logs.length ? lg.logs.map(l =>
+      '<div class="logrow"><span class="tag ' + esc(l.level) + '">' + esc(l.level) + '</span><span class="src">' + esc(l.source) + '</span>' +
+      '<span class="m">' + esc(l.msg) + '</span><span class="t">' + ago(l.ts, now) + '</span></div>').join('')
+      : '<p class="note" style="padding:14px;text-align:center">No events yet</p>';
+    $('hist-list').innerHTML = hs.history.length ? hs.history.map(c =>
+      '<div class="logrow"><span class="tag ' + (c.ok ? 'OK' : 'ERROR') + '">' + esc(c.action) + '</span>' +
+      '<span class="m">' + esc(c.user) + '</span><span class="t">' + ago(c.ts, now) + '</span></div>').join('')
+      : '<p class="note" style="padding:14px;text-align:center">No commands recorded yet</p>';
+  } catch (e) { if (e.status === 401) setAuth(false); }
+}
+setInterval(pollAudit, 5000);
+
+function ago(ts, now) {
+  const s = Math.max(0, Math.floor(now - ts));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+
+/* ============================================================================
+   AUTH — unlock/lock
+   ============================================================================ */
+function setAuth(on) {
+  S.auth = on;
+  ['console-veil', 'tools-veil', 'logs-veil', 'hist-veil', 'cfg-veil', 'accs-veil', 'sc-veil', 'ops-veil'].forEach(id => { const el = $(id); if (el) el.classList.toggle('hidden', on); });
+  $('cmd-input').disabled = !on; $('btn-exec').disabled = !on;
+  $('chips').querySelectorAll('button').forEach(b => b.disabled = !on);
+  $('tools-grid').querySelectorAll('button').forEach(b => b.disabled = !on);
+  $('access-form').classList.toggle('hidden', on);
+  $('access-on').classList.toggle('hidden', !on);
+  $('access-meta').textContent = on ? 'ENABLED' : 'LOCKED';
+  if (S.status) renderStatus(S.status);
+  if (on) { pollAudit(); runDiag(); loadAccounts(); loadSourceConfig(); scLoadTemplates(); loadScript($('sc-account').value); opsRefresh(); }
+}
+
+$('btn-unlock').onclick = async () => {
+  const tok = $('a-token').value.trim();
+  if (!tok) return showErr('a-err', 'Enter the access token');
+  showErr('a-err', null);
+  const b = $('btn-unlock'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Verifying';
+  try {
+    const r = await api('/api/jarvis/auth', {method: 'POST', body: {token: tok}});
+    if (r.ok) {
+      S.token = tok; sessionStorage.setItem('jv_tok', tok);
+      $('a-token').value = '';
+      setAuth(true);
+      term('ok', 'AUTHORIZED ▸ welcome back, Commander');
+      toast('ok', 'JARVIS ACCESS: ENABLED');
     }
-  } catch {}
-}
-
-/* console */
-function addMsg(who, text, status) {
-  const el = document.createElement("div");
-  el.className = `fade-in rounded-lg p-3 ${who==="user" ? "msg-user bg-violet-400/5" : "msg-jarvis bg-cyan-400/5"}`;
-  el.innerHTML = `<div class="flex items-center gap-2 mb-1">
-      <span class="mono text-[.58rem] tracking-[.2em] ${who==="user"?"text-violet-300":"text-cyan-300"}">${who==="user"?"YOU":"J.A.R.V.I.S"}</span>
-      ${status ? `<span class="badge st-${status}">${esc(status)}</span>` : ""}</div>
-    <div class="mono text-[.7rem] leading-relaxed text-slate-300 whitespace-pre-wrap">${esc(text)}</div>`;
-  $("thread").appendChild(el);
-  $("thread").scrollTop = $("thread").scrollHeight;
-  while ($("thread").children.length > 80) $("thread").firstChild.remove();
-}
-async function sendGoal(planOnly) {
-  const text = $("goalInput").value.trim();
-  if (!text) return;
-  $("goalInput").value = "";
-  addMsg("user", text + (planOnly ? "  [plan preview]" : ""));
-  addMsg("jarvis", planOnly ? "intent → context → entities → plan (no mutation)..." : "understanding → planning → verified execution...", "WAITING");
-  const res = await api("/api/goal", { method: "POST",
-    body: JSON.stringify({ text, plan_only: planOnly, account_id: $("goalAccount").value || undefined }) });
-  $("thread").lastChild.remove();
-  if (planOnly && res.plan) { showPlan(res); return; }
-  addMsg("jarvis", res.reply || res.error || "no reply", res.status || (res.ok ? "SUCCESS" : "FAILED"));
-  poll();
-}
-function showPlan(res) {
-  CURRENT_PLAN = res.plan;
-  const p = res.plan;
-  $("planCard").classList.remove("hidden");
-  $("planBadges").innerHTML =
-    `<span class="badge st-PLANNING">${esc(p.intent)}</span>
-     <span class="badge st-${p.mode||"READ"}">MODE ${esc(p.mode||"READ")}</span>
-     <span class="badge ${p.risk==="high"?"st-FAILED":p.risk==="medium"?"st-PAUSED":"st-RUNNING"}">RISK ${String(p.risk||"low").toUpperCase()}</span>
-     ${p.confirmation_required?`<span class="badge text-amber-300 border-amber-400/40">CONFIRM REQUIRED</span>`:""}
-     ${p.report_only?`<span class="badge st-WAITING">REPORT ONLY</span>`:""}`;
-  $("planSummary").textContent = p.summary || "(no summary)";
-  $("planEntities").textContent = (p.entities||[]).length ? "Entities: " + p.entities.join(" | ") : "";
-  $("planSteps").innerHTML = (p.steps||[]).map((s,i) =>
-    `<div class="mono text-[.64rem] text-slate-300 flex gap-2"><span class="text-cyan-500">${i+1}.</span>
-     <span class="text-cyan-200">${esc(s.tool)}</span><span class="text-slate-500">${esc(s.note)}</span>
-     ${s.depends_on&&s.depends_on.length?`<span class="text-violet-400/70">↳ needs step ${s.depends_on.map(d=>d+1).join(",")}</span>`:""}</div>`).join("")
-    + (p.missing&&p.missing.length?`<div class="mono text-[.62rem] text-amber-300 mt-1">missing: ${esc(p.missing.join("; "))}</div>`:"");
-  lucide.createIcons();
-  addMsg("jarvis", res.reply, "WAITING");
-}
-$("planExecute").onclick = async () => {
-  if (!CURRENT_PLAN) return;
-  const pid = CURRENT_PLAN.plan_id;
-  $("planCard").classList.add("hidden");
-  addMsg("jarvis", "executing plan ...", "WAITING");
-  const res = await api("/api/goal/execute", { method:"POST", body: JSON.stringify({ plan_id: pid }) });
-  $("thread").lastChild.remove();
-  addMsg("jarvis", res.reply || res.error || "done", res.status || (res.ok ? "SUCCESS" : "FAILED"));
-  CURRENT_PLAN = null;
-  poll();
+  } catch (e) {
+    showErr('a-err', e.message);
+    toast('err', 'Access denied — fail closed');
+  } finally { b.disabled = false; b.textContent = 'Unlock Console'; }
 };
-$("planDiscard").onclick = () => { $("planCard").classList.add("hidden"); CURRENT_PLAN = null; };
-
-/* controls */
-window.taskAction = async (tid, action) => {
-  const r = await api(`/api/tasks/${tid}/action`, { method:"POST", body: JSON.stringify({ action }) });
-  toast(r.ok ? `task ${action} ok` : (r.error || "failed"), !!r.ok); poll();
-};
-window.monStop = async (mid) => { const r = await api(`/api/monitors/${mid}/stop`, { method:"POST" }); toast(r.ok ? "monitor stopped" : "failed", r.ok); poll(); };
-window.schedCancel = async (sid) => { const r = await api(`/api/schedules/${sid}/cancel`, { method:"POST" }); toast(r.ok ? "schedule cancelled" : "failed", r.ok); poll(); };
-window.accConnect = async (aid) => { const r = await api(`/api/accounts/${aid}/connect`, { method:"POST" }); toast(r.ok ? (r.authorized ? "connected + authorized" : "connected, login required") : (r.error||"connect failed"), !!r.ok); poll(); };
-window.accDisconnect = async (aid) => { await api(`/api/accounts/${aid}/disconnect`, { method:"POST" }); toast("disconnected"); poll(); };
-window.accDelete = async (aid) => { if (!confirm("Delete this account and its session?")) return; await api(`/api/accounts/${aid}`, { method:"DELETE" }); toast("account removed"); poll(); };
-window.openLogin = (aid) => { openAccModal("login"); $("loginAccount").value = aid; $("sessionAccount").value = aid; };
-$("confirmYes").onclick = async () => { if (!CONFIRM_ACCOUNT) return; const r = await api("/api/confirm", { method:"POST", body: JSON.stringify({ account_id: CONFIRM_ACCOUNT, answer: "yes" }) }); addMsg("jarvis", r.reply || "executed", r.status || "SUCCESS"); poll(); };
-$("confirmNo").onclick = async () => { if (!CONFIRM_ACCOUNT) return; await api("/api/confirm", { method:"POST", body: JSON.stringify({ account_id: CONFIRM_ACCOUNT, answer: "no" }) }); addMsg("jarvis","Aborted. Nothing was executed.","WAITING"); poll(); };
-
-/* account modal */
-function openAccModal(tab = "creds") {
-  $("accountModal").classList.remove("hidden");
-  const opts = (STATE?.accounts||[]).map((a,i)=>`<option value="${a.account_id}">${i+1}. ${esc(a.label)}</option>`).join("");
-  $("loginAccount").innerHTML = opts; $("sessionAccount").innerHTML = opts;
-  switchTab(tab); lucide.createIcons();
-}
-function switchTab(tab) {
-  document.querySelectorAll("[data-pane]").forEach(p => p.classList.toggle("hidden", p.dataset.pane !== tab));
-  document.querySelectorAll(".acc-tab").forEach(b => {
-    b.className = `acc-tab px-2.5 py-1.5 rounded-md border ${b.dataset.tab === tab ? "border-cyan-400/40 text-cyan-300" : "border-slate-700 text-slate-400"}`;
-  });
-}
-$("btnAddAccount").onclick = () => openAccModal("creds");
-$("accModalClose").onclick = () => $("accountModal").classList.add("hidden");
-document.querySelectorAll(".acc-tab").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
-$("accCreate").onclick = async () => {
-  const r = await api("/api/accounts", { method:"POST", body: JSON.stringify({
-    label: $("accLabel").value, api_id: $("accApiId").value, api_hash: $("accApiHash").value }) });
-  if (r.ok) { toast("account created"); $("accApiHash").value=""; switchTab("login"); poll(); }
-  else toast(r.error || "failed", false);
-};
-$("loginSend").onclick = async () => {
-  const r = await api(`/api/accounts/${$("loginAccount").value}/login/start`, { method:"POST", body: JSON.stringify({ phone: $("loginPhone").value }) });
-  toast(r.ok ? (r.already ? "already authorized" : "code sent — check Telegram") : (r.error||"failed"), !!r.ok); poll();
-};
-$("loginComplete").onclick = async () => {
-  const r = await api(`/api/accounts/${$("loginAccount").value}/login/complete`, { method:"POST",
-    body: JSON.stringify({ code: $("loginCode").value, password: $("loginPassword").value }) });
-  if (r.ok) { toast("authorized — systems online"); $("loginPassword").value=""; $("accountModal").classList.add("hidden"); }
-  else toast(r.need_password ? "2FA password required" : (r.error||"login failed"), false);
-  poll();
-};
-$("sessionImport").onclick = async () => {
-  const r = await api(`/api/accounts/${$("sessionAccount").value}/session`, { method:"POST",
-    body: JSON.stringify({ session_string: $("sessionString").value }) });
-  if (r.ok) { toast("session imported — authorized"); $("sessionString").value=""; $("accountModal").classList.add("hidden"); }
-  else toast(r.error || "invalid session", false);
-  poll();
+$('btn-lock').onclick = () => {
+  S.token = ''; sessionStorage.removeItem('jv_tok');
+  setAuth(false);
+  term('sys', 'Console locked — token cleared from session storage');
 };
 
-/* config modal */
-let CONFIG_AID = null;
-window.openConfig = (aid) => {
-  CONFIG_AID = aid;
-  const a = (STATE?.accounts||[]).find(x => x.account_id === aid);
-  $("configFor").textContent = a ? `${a.label} · ${a.main_channels.length} configured` : "";
-  $("configChannels").value = a ? a.main_channels.map(c => c.id).join("\n") : "";
-  $("configNotes").innerHTML = "";
-  $("configModal").classList.remove("hidden"); lucide.createIcons();
-};
-$("configModalClose").onclick = () => $("configModal").classList.add("hidden");
-$("configSave").onclick = async () => {
-  const refs = $("configChannels").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  const r = await api(`/api/accounts/${CONFIG_AID}/config`, { method:"POST", body: JSON.stringify({ main_channels: refs }) });
-  if (r.ok) {
-    toast(`saved ${r.main_channels.length} main channel(s)`);
-    $("configNotes").innerHTML = (r.notes||[]).map(n=>`<div>! ${esc(n)}</div>`).join("");
-    if (!(r.notes||[]).length) $("configModal").classList.add("hidden");
-    poll();
-  } else toast(r.error || "failed", false);
+/* ============================================================================
+   TELEGRAM — session-string flow
+   ============================================================================ */
+$('tab-session').onclick = () => { $('tab-session').classList.add('on'); $('tab-phone').classList.remove('on'); $('flow-session').classList.remove('hidden'); $('flow-phone').classList.add('hidden'); };
+$('tab-phone').onclick = () => { $('tab-phone').classList.add('on'); $('tab-session').classList.remove('on'); $('flow-phone').classList.remove('hidden'); $('flow-session').classList.add('hidden'); };
+
+$('btn-connect').onclick = async () => {
+  const b = $('btn-connect');
+  showErr('conn-err', null);
+  b.disabled = true; b.innerHTML = '<span class="spin"></span> Negotiating…';
+  try {
+    const r = await api('/api/telegram/connect', {method: 'POST', body: {
+      api_id: $('c-apiid').value.trim(), api_hash: $('c-apihash').value, session_string: $('c-session').value }});
+    /* credentials wiped from the form immediately after use */
+    $('c-apiid').value = ''; $('c-apihash').value = ''; $('c-session').value = '';
+    toast('ok', 'Telegram connected as @' + (r.account && r.account.username));
+    term('ok', 'TELEGRAM CONNECTED ▸ session valid ▸ @' + (r.account && r.account.username));
+    await pollStatus();
+  } catch (e) {
+    showErr('conn-err', e.message);
+  } finally { b.disabled = false; b.textContent = 'Connect Telegram'; }
 };
 
-/* wiring */
-$("goalSend").onclick = () => sendGoal(false);
-$("goalPlanBtn").onclick = () => sendGoal(true);
-$("goalInput").addEventListener("keydown", e => { if (e.key === "Enter") sendGoal(false); });
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => { $("goalInput").value = c.dataset.goal; sendGoal(false); });
-setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("en-GB"); }, 1000);
+$('btn-disconnect').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const b = $('btn-disconnect'); b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+  try {
+    await api('/api/telegram/disconnect', {method: 'POST', auth: true});
+    toast('info', 'Telegram disconnected — client stopped, metadata cleared');
+    term('sys', 'TELEGRAM DISCONNECTED by operator');
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+  finally { b.disabled = false; b.textContent = 'Disconnect'; }
+};
 
-(function stars(){
-  const c = $("stars"), ctx = c.getContext("2d");
-  let W, H, pts;
-  function resize(){ W = c.width = innerWidth; H = c.height = innerHeight;
-    pts = Array.from({length: 130}, () => ({ x: Math.random()*W, y: Math.random()*H,
-      r: Math.random()*1.3+0.3, v: Math.random()*0.25+0.05, o: Math.random()*0.5+0.15 })); }
-  resize(); addEventListener("resize", resize);
-  (function draw(){ ctx.clearRect(0,0,W,H);
-    for (const p of pts){ p.y -= p.v; if (p.y < -4) p.y = H+4;
-      ctx.globalAlpha = p.o; ctx.fillStyle = "#7dd3fc"; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill(); }
-    ctx.globalAlpha = 1; requestAnimationFrame(draw); })();
+/* ============================================================================
+   TELEGRAM — phone + OTP + 2FA flow
+   ============================================================================ */
+function phoneStep(step) {
+  $('step-phone').classList.toggle('hidden', step !== 'phone');
+  $('step-otp').classList.toggle('hidden', step !== 'otp');
+  $('step-2fa').classList.toggle('hidden', step !== '2fa');
+  $('login-status').classList.toggle('hidden', !step);
+}
+function loginMsg(t) { $('login-status-tx').textContent = t; }
+async function withBtn(id, label, fn) {
+  const b = $(id); b.disabled = true; const old = b.innerHTML; b.innerHTML = '<span class="spin"></span> ' + label;
+  try { await fn(); } finally { b.disabled = false; b.innerHTML = old; }
+}
+
+$('btn-sendcode').onclick = () => withBtn('btn-sendcode', 'Sending…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/send_code', {method: 'POST', body: {
+      api_id: $('p-apiid').value.trim(), api_hash: $('p-apihash').value, phone: $('p-phone').value.trim() }});
+    S.loginId = r.login_id;
+    phoneStep('otp'); loginMsg('OTP sent by Telegram — check your app (5 min window)');
+    $('p-otp').focus();
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+$('btn-verify').onclick = () => withBtn('btn-verify', 'Verifying…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/verify_code', {method: 'POST', body: {login_id: S.loginId, code: $('p-otp').value.trim()}});
+    $('p-otp').value = '';
+    if (r.needs_2fa) {
+      phoneStep('2fa'); loginMsg('OTP accepted — account requires 2FA password');
+      $('p-2fa').focus();
+      return;
+    }
+    finishLogin(r);
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+$('btn-2fa').onclick = () => withBtn('btn-2fa', 'Verifying…', async () => {
+  showErr('phone-err', null);
+  try {
+    const r = await api('/api/telegram/verify_2fa', {method: 'POST', body: {login_id: S.loginId, password: $('p-2fa').value}});
+    $('p-2fa').value = '';
+    finishLogin(r);
+  } catch (e) { showErr('phone-err', e.message); }
+});
+
+function finishLogin(r) {
+  phoneStep(null);
+  $('p-apiid').value = ''; $('p-apihash').value = ''; $('p-phone').value = '';
+  toast('ok', 'Telegram authorized as @' + (r.account && r.account.username));
+  term('ok', 'TELEGRAM AUTHORIZED ▸ @' + (r.account && r.account.username) + ' — session string shown once in the form');
+  if (r.session_string) {
+    $('sess-out').value = r.session_string;
+    $('sess-reveal').classList.remove('hidden');
+  }
+  pollStatus();
+}
+$('btn-copy-sess').onclick = async () => {
+  try { await navigator.clipboard.writeText($('sess-out').value); toast('ok', 'Session string copied — store it somewhere safe'); }
+  catch { $('sess-out').select(); document.execCommand('copy'); toast('info', 'Session string copied'); }
+};
+$('btn-hide-sess').onclick = () => { $('sess-out').value = ''; $('sess-reveal').classList.add('hidden'); toast('info', 'Session string wiped from the page'); };
+
+/* ============================================================================
+   COMMANDS — console + confirmation flow (origin-bound, expiring)
+   ============================================================================ */
+async function sendCommand(raw) {
+  raw = (raw || '').trim();
+  if (!raw || S.busy) return;
+  if (!S.auth) { term('err', 'ACCESS DENIED ▸ unlock JARVIS access first (fail closed)'); return; }
+  term('user', raw);
+  busy(true);
+  hideConfirm();
+  $('term').insertAdjacentHTML('beforeend', '<p id="thinking" class="t-sys"><span class="typing"><i></i><i></i><i></i></span> JARVIS resolving intent…</p>');
+  $('term').scrollTop = $('term').scrollHeight;
+  try {
+    const r = await api('/api/jarvis/command', {method: 'POST', auth: true, body: {command: raw}});
+    const th = $('thinking'); if (th) th.remove();
+    await termLines(r.ok ? 'jarvis' : 'err', r.lines || []);
+    if (r.requires_confirmation) showConfirm(r.confirm_expires_in || 90);
+    pollStatus();
+  } catch (e) {
+    const th = $('thinking'); if (th) th.remove();
+    if (e.status === 401) { setAuth(false); term('err', 'SESSION EXPIRED ▸ unlock again'); }
+    else term('err', 'ERROR ▸ ' + e.message);
+  } finally { busy(false); }
+}
+
+let confirmTimer = null;
+function showConfirm(secs) {
+  S.confirmUntil = Date.now() + secs * 1000;
+  $('confirm-bar').classList.remove('hidden');
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((S.confirmUntil - Date.now()) / 1000));
+    $('confirm-countdown').textContent = left + 's';
+    if (left <= 0) { hideConfirm(); term('err', 'CONFIRMATION EXPIRED ▸ issue the command again'); }
+  };
+  confirmTimer = setInterval(tick, 1000); tick();
+}
+function hideConfirm() { $('confirm-bar').classList.add('hidden'); if (confirmTimer) { clearInterval(confirmTimer); confirmTimer = null; } }
+$('btn-confirm-yes').onclick = () => { hideConfirm(); sendCommand('yes'); };
+$('btn-confirm-no').onclick = () => { hideConfirm(); sendCommand('no'); };
+
+$('btn-exec').onclick = () => { const v = $('cmd-input').value; $('cmd-input').value = ''; sendCommand(v); };
+$('cmd-input').addEventListener('keydown', e => { if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; sendCommand(v); } });
+
+/* chips */
+[['STATUS','/AI STATUS'],['FOLDERS','/AI FOLDERS'],['DEAD SCAN','/AI DEAD CHANNELS'],['DIAG','/AI DIAGNOSTICS'],
+ ['CROSS','/cross status'],['हिंदी','dead channels ki list banao'],['SCHEDULE','10 minute baad start karo'],['HELP','/AI HELP']]
+.forEach(([l, c]) => {
+  const b = document.createElement('button');
+  b.className = 'chip'; b.textContent = l; b.disabled = true;
+  b.onclick = () => sendCommand(c);
+  $('chips').appendChild(b);
+});
+
+/* tools grid */
+const TOOLS = [
+  ['/AI STATUS','STATUS','Full live system report','activity'],
+  ['/AI ACCOUNT','ACCOUNT','Identity, auth scope','user'],
+  ['/AI FOLDERS','FOLDERS','Dialog folders + counts','folder'],
+  ['/AI FOLDERS CHANNELS','CHANNEL LIST','Every folder channel','list'],
+  ['/AI DEAD CHANNELS','DEAD SCAN','Inactive / restricted','scan',1],
+  ['/AI SEARCH promo','MSG SEARCH','Readable message search','search'],
+  ['/AI RECENT ACTIVITY','RECENT','Latest posting activity','pulse'],
+  ['/AI SAVED MESSAGES','SAVED MSGS','Command inbox monitor','inbox'],
+  ['/AI SCHEDULE LIST','JOBS','Scheduled job registry','clock'],
+  ['/AI DIAGNOSTICS','DIAG','PASS / WARN / FAIL sweep','alert'],
+  ['/AI SAVE STATE','SAVE','Atomic JSON persistence','save'],
+  ['/AI HELP','HELP','Full command matrix','term'],
+];
+const ICONS = {
+  activity:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  user:'<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  scan:'<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  pulse:'<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4M12 17h.01"/>',
+  save:'<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  term:'<path d="m4 17 6-6-6-6M12 19h8"/>',
+};
+TOOLS.forEach(([cmd, name, desc, icon, red]) => {
+  const b = document.createElement('button');
+  b.className = 'tile' + (red ? ' red' : ''); b.disabled = true;
+  b.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICONS[icon] + '</svg><b>' + name + '</b><span>' + desc + '</span>';
+  b.onclick = () => sendCommand(cmd);
+  $('tools-grid').appendChild(b);
+});
+
+/* engine quick controls — routed through console for unified confirmation */
+$('btn-start').onclick = () => sendCommand('/cross start');
+$('btn-stop').onclick = () => sendCommand('/cross stop');
+$('btn-reset').onclick = () => sendCommand('/cross reset');
+
+/* scheduler cancel */
+async function cancelJob(id) {
+  try {
+    const r = await api('/api/scheduler/cancel', {method: 'POST', auth: true, body: {id}});
+    toast('ok', r.message || 'Job cancelled');
+    pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+/* ============================================================================
+   DIAGNOSTICS
+   ============================================================================ */
+async function runDiag() {
+  if (!S.up) return;
+  const b = $('btn-diag'); b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+  try {
+    const d = await api('/api/diagnostics');
+    $('diag-ring').setAttribute('stroke-dasharray', (d.score / 100 * 264) + ' 264');
+    $('diag-score').textContent = d.score + '%';
+    const v = d.score >= 85 ? ['NOMINAL', '#6ee7b7'] : d.score >= 60 ? ['DEGRADED', '#fcd34d'] : ['CRITICAL', '#fda4af'];
+    $('diag-verdict').textContent = v[0]; $('diag-verdict').style.color = v[1];
+    const pass = d.checks.filter(c => c.status === 'PASS').length;
+    const warn = d.checks.filter(c => c.status === 'WARN').length;
+    const fail = d.checks.filter(c => c.status === 'FAIL').length;
+    $('diag-meta').textContent = pass + ' pass · ' + warn + ' warn · ' + fail + ' fail';
+    $('diag-list').innerHTML = d.checks.map(c =>
+      '<div class="diag-row"><span class="st ' + c.status + '">' + c.status + '</span><b>' + esc(c.name) + '</b><span title="' + esc(c.detail) + '">' + esc(c.detail) + '</span></div>').join('');
+  } catch (e) { toast('err', 'Diagnostics failed: ' + e.message); }
+  finally { b.disabled = false; b.textContent = 'Run'; }
+}
+$('btn-diag').onclick = runDiag;
+$('btn-refresh').onclick = () => { pollStatus(); pollAudit(); };
+$('offline-retry').onclick = pollStatus;
+
+/* ============================================================================
+   CLOCK (Asia/Kathmandu) + particles + boot
+   ============================================================================ */
+const ktm = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kathmandu', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false});
+setInterval(() => { $('clock').textContent = ktm.format(new Date()); }, 1000);
+$('clock').textContent = ktm.format(new Date());
+
+(function particles() {
+  const cv = $('stars'), ctx = cv.getContext('2d');
+  let W, H, P = [];
+  const rs = () => {
+    W = cv.width = innerWidth; H = cv.height = innerHeight;
+    const n = Math.min(70, Math.floor(W * H / 26000));
+    P = Array.from({length: n}, () => ({x: Math.random() * W, y: Math.random() * H, vy: .08 + Math.random() * .25, r: .6 + Math.random() * 1.4, a: .1 + Math.random() * .3, red: Math.random() > .88}));
+  };
+  rs(); addEventListener('resize', rs);
+  (function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const p of P) {
+      p.y -= p.vy; if (p.y < -4) { p.y = H + 4; p.x = Math.random() * W; }
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.283);
+      ctx.fillStyle = p.red ? 'rgba(255,60,80,' + p.a + ')' : 'rgba(56,205,255,' + p.a + ')';
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  })();
 })();
 
-runBoot();
-poll();
-setInterval(poll, 3000);
+(function boot() {
+  const lines = ['DEVIL JARVIS CORE v3.1','Mounting Telegram Tool Manager…','JSON persistence layer … OK','AI fallback chain — GROQ primary','Scheduler online · Asia/Kathmandu','Fail-closed authorization … ARMED','Uplink ready'];
+  lines.forEach((l, i) => setTimeout(() => {
+    const p = document.createElement('p'); p.textContent = '▸ ' + l + (i < lines.length - 1 ? '  OK' : '');
+    $('boot-lines').appendChild(p);
+  }, 180 * i + 150));
+  let pct = 0;
+  const iv = setInterval(() => {
+    pct = Math.min(100, pct + 3 + Math.floor(Math.random() * 4));
+    $('boot-pct').textContent = pct; $('boot-bar').style.width = pct + '%';
+    if (pct >= 100) clearInterval(iv);
+  }, 42);
+  setTimeout(() => $('boot').classList.add('fade'), 1900);
+  setTimeout(() => $('boot').remove(), 2500);
+})();
+
+/* ============================================================================
+   v4 — Accounts, Source Config, Script Sandbox
+   ============================================================================ */
+function twoStep(btn, label, fn) {
+  btn.textContent = label;
+  btn.onclick = () => {
+    if (btn.dataset.armed) {
+      delete btn.dataset.armed; btn.classList.remove('armed');
+      btn.disabled = true;
+      Promise.resolve(fn()).finally(() => { btn.disabled = false; btn.textContent = label; });
+    } else {
+      btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = 'sure?';
+      setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = label; }, 3000);
+    }
+  };
+}
+
+async function loadAccounts() {
+  if (!S.auth || !S.up) return;
+  try {
+    const r = await api('/api/accounts/list', {auth: true});
+    const list = r.accounts || [];
+    const max = r.max || 2;
+    $('accs-meta').textContent = list.length + '/' + max;
+    $('accs-empty').classList.toggle('hidden', list.length > 0);
+    $('btn-add-acc').disabled = list.length >= max;
+    $('accs-list').innerHTML = list.map(a => {
+      const init = (a.label || a.username || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+      return '<div class="acc-row"><div class="acct-mini">' + esc(init) + '</div>' +
+        '<div style="min-width:0"><p style="font-weight:700;color:#f1f5f9;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.label) + '</p>' +
+        '<p style="font-family:var(--mono);font-size:9px;color:#67e8f9">@' + esc(a.username || 'unknown') +
+        (a.persisted ? '' : ' · <span style="color:#fcd34d">memory-only</span>') + '</p></div>' +
+        '<span class="badge ' + (a.active ? 'act' : 'idle') + '">' + (a.active ? 'ACTIVE' : 'IDLE') + '</span>' +
+        '<span class="dot ' + (a.connected ? 'ok' : 'dim') + '" title="' + (a.connected ? 'connected' : 'offline') + '"></span>' +
+        '<div class="acc-ops">' + (a.active ? '' : '<button class="mini" data-act="' + esc(a.id) + '">Activate</button>') +
+        '<button class="mini red" data-delid="' + esc(a.id) + '">Remove</button></div></div>';
+    }).join('');
+    $('accs-list').querySelectorAll('[data-act]').forEach(b => b.onclick = () => activateAccount(b.dataset.act));
+    $('accs-list').querySelectorAll('[data-delid]').forEach(b => twoStep(b, 'Remove', () => removeAccount(b.dataset.delid)));
+    const opts = list.length
+      ? list.map(a => '<option value="' + esc(a.id) + '">' + esc(a.label) + ' (@' + esc(a.username || '?') + ')</option>').join('')
+      : '<option value="">— select account —</option>';
+    ['sc-account', 'ac-account'].forEach(sid => {
+      const sel = $(sid); if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = opts;
+      if (cur) sel.value = cur;
+    });
+    if (SC.mode === 'automation') loadTemplates();
+  } catch (e) { if (e.status === 401) setAuth(false); }
+}
+
+$('btn-add-acc').onclick = () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  $('m-err').classList.add('hidden');
+  $('modal').classList.remove('hidden');
+};
+$('btn-m-close').onclick = () => $('modal').classList.add('hidden');
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') $('modal').classList.add('hidden'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('modal').classList.add('hidden'); });
+
+$('btn-m-add').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  const b = $('btn-m-add'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Validating…';
+  $('m-err').classList.add('hidden');
+  try {
+    const r = await api('/api/accounts/add', {method: 'POST', auth: true, body: {
+      label: $('m-label').value.trim(), api_id: $('m-apiid').value.trim(),
+      api_hash: $('m-apihash').value, session_string: $('m-session').value}});
+    ['m-label','m-apiid','m-apihash','m-session'].forEach(id => { $(id).value = ''; });
+    $('modal').classList.add('hidden');
+    toast('ok', 'Account added: @' + r.username);
+    if (r.warning) toast('info', r.warning);
+    await loadAccounts();
+  } catch (e) {
+    $('m-err').textContent = e.message; $('m-err').classList.remove('hidden');
+  } finally { b.disabled = false; b.textContent = 'Connect & Save'; }
+};
+
+async function activateAccount(id) {
+  try {
+    const r = await api('/api/accounts/activate', {method: 'POST', auth: true, body: {id}});
+    toast('ok', r.message || 'Activated');
+    await loadAccounts();
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+async function removeAccount(id) {
+  try {
+    const r = await api('/api/accounts/remove', {method: 'POST', auth: true, body: {id}});
+    toast('info', r.message || 'Removed');
+    await loadAccounts();
+    await pollStatus();
+  } catch (e) { toast('err', e.message); }
+}
+
+async function loadSourceConfig() {
+  if (!S.auth || !S.up) return;
+  try {
+    const r = await api('/api/config/source', {auth: true});
+    const c = r.config || {};
+    $('cf-chat').value = c.source_chat_id ?? '';
+    $('cf-ids').value = (c.source_message_ids || []).join(', ');
+    $('cf-msrc').value = c.monitor_source || '';
+    $('cf-mdst').value = c.monitor_destination || '';
+    $('cf-thresh').value = c.dead_threshold_days ?? 30;
+    $('cf-status').textContent = 'Saved: ' + (c.updated_at
+      ? new Date(c.updated_at * 1000).toLocaleString('en-GB', {timeZone: 'Asia/Kathmandu'}) + ' NPT'
+      : 'never') + ' · priority JSON > ENV';
+  } catch (e) { /* silent — next refresh retries */ }
+}
+
+$('btn-cf-save').onclick = async () => {
+  if (!S.auth) return toast('err', 'Unlock JARVIS access first');
+  showErr('cf-err', null);
+  const b = $('btn-cf-save'); b.disabled = true; b.innerHTML = '<span class="spin"></span> Saving…';
+  try {
+    const r = await api('/api/config/source', {method: 'POST', auth: true, body: {
+      source_chat_id: $('cf-chat').value.trim(), source_message_ids: $('cf-ids').value.trim(),
+      monitor_source: $('cf-msrc').value.trim(), monitor_destination: $('cf-mdst').value.trim(),
+      dead_threshold_days: $('cf-thresh').value.trim() || 30}});
+    $('cf-status').textContent = 'Saved: just now · effective chat ' + (r.effective && r.effective.source_chat_id || '—') +
+      ' · msgs [' + ((r.effective && r.effective.source_message_ids) || []).join(',') + '] · hot applied';
+    toast('ok', 'Source configuration saved — live applied');
+    pollStatus();
+  } catch (e) { showErr('cf-err', e.message); }
+  finally { b.disabled = false; b.textContent = 'Save Configuration'; }
+};
+
+/* ---------------- Custom Script Installer (Safe / Raw modes) ---------------- */
+const SC = {mode:'safe', running:false, paused:false, poll:null, templates:[], cur:'blank'};
+
+const GCHIPS = ['client','SESSION_STRING','PHONE','events','errors','utils','types','asyncio','log','print','sleep','os','re','time'];
+$('sc-globals').innerHTML = GCHIPS.map(c=>'<span class="gchip">'+esc(c)+'</span>').join('');
+
+function scButtons(){
+  $('btn-sc-stop').disabled = !SC.running || !S.auth;
+  $('btn-sc-install').disabled = !S.auth || SC.running;
+  $('sc-running').classList.toggle('hidden', !SC.running);
+  $('btn-sc-clear').disabled = !S.auth;
+  $('btn-sc-pause').disabled = !S.auth || !SC.running;
+}
+function fmtTs(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString('en-GB',{hour12:false}); }
+function scTerm(lines, replace){
+  const out=$('sc-out');
+  if(replace) out.innerHTML='';
+  const frag=document.createDocumentFragment();
+  (lines||[]).forEach(l=>{
+    const d=document.createElement('div'); d.className='lrow';
+    d.innerHTML='<span class="lts">'+fmtTs(l.ts)+'</span><span class="llv ld-'+esc(l.level)+'">'+esc(l.level)+'</span><span class="lmsg">'+esc(l.msg)+'</span>';
+    frag.appendChild(d);
+  });
+  out.appendChild(frag);
+  out.querySelector('.note')?.remove();
+  if(!SC.paused) out.scrollTop = out.scrollHeight;
+}
+async function scFetchLogs(accId){
+  if(!accId||!S.auth) return;
+  try{
+    const r=await api('/api/script/logs/'+encodeURIComponent(accId),{auth:true});
+    scTerm(r.logs||[], true);
+    const h=r.healing||{};
+    const hb=$('sc-heal');
+    if(hb){
+      const active=(h.retries||0)||(h.floodwait_s||0)||(h.reconnects||0);
+      hb.classList.toggle('hidden', !active);
+      if(active) hb.textContent='HEAL ▸ '+(h.retries||0)+' retries · '+(h.floodwait_s||0)+'s floodwait · '+(h.reconnects||0)+' reconnects';
+    }
+    const wasRunning = SC.running;
+    SC.running = !!r.running; scButtons();
+    if(wasRunning && !SC.running) scStopPoll();
+  }catch(e){}
+}
+function scStartPoll(accId){
+  scStopPoll();
+  SC.poll=setInterval(()=>{ if(!document.hidden) scFetchLogs(accId); }, 2000);
+}
+function scStopPoll(){ if(SC.poll){ clearInterval(SC.poll); SC.poll=null; } }
+
+function editorLines(){
+  const v=$('sc-code').value;
+  const n=v.split('\n').length;
+  const nums=$('sc-nums');
+  nums.textContent=Array.from({length:n},(_,i)=>i+1).join('\n');
+  nums.scrollTop = 0;
+}
+$('sc-code').addEventListener('input', editorLines);
+$('sc-code').addEventListener('scroll', ()=>{ $('sc-nums').style.transform='translateY(-'+$('sc-code').scrollTop+'px)'; });
+
+async function scLoadTemplates(){
+  try{
+    const r=await api('/api/scripts/templates',{auth:true});
+    SC.templates=r.templates||[];
+    const sel=$('sc-tpl');
+    sel.innerHTML='';
+    const groups={};
+    SC.templates.forEach(t=>{ (groups[t.source]=(groups[t.source]||[])).push(t); });
+    [['built-in','Templates'],['user','My templates']].forEach(([src,name])=>{
+      const g=document.createElement('optgroup'); g.label=name;
+      (groups[src]||[]).forEach(t=>{ const o=document.createElement('option'); o.value=t.key; o.textContent=t.label; g.appendChild(o); });
+      if(g.children.length) sel.appendChild(g);
+    });
+    if(!SC.templates.length) sel.innerHTML='<option value="custom">Custom</option>';
+  }catch(e){}
+}
+function scApplyTemplate(key){
+  const t=SC.templates.find(x=>x.key===key);
+  if(!t) return;
+  const cur=$('sc-code').value;
+  if(cur.trim() && cur!==t.code && !confirm('Replace current code with template?')) { $('sc-tpl').value=SC.cur; return; }
+  $('sc-code').value=t.code; editorLines(); SC.cur=key;
+  // built-in telethon templates run in raw mode — switch + show warning
+  if(t.mode && t.mode!==SC.mode){ setMode(t.mode); toast('info','Mode switched to '+t.mode.toUpperCase()+' for this template'); }
+}
+$('sc-tpl').onchange=()=>scApplyTemplate($('sc-tpl').value);
+$('btn-sc-loadtpl').onclick=()=>scApplyTemplate($('sc-tpl').value);
+
+const AUTO_GLOBALS=['READ_MESSAGE','SEARCH_MESSAGE','GET_CHANNEL_INFO','GET_RECENT_MESSAGES','GET_FOLDERS',
+  'GET_ACCOUNT_INFO','CHECK_PERMISSIONS','COPY_SOURCE_TEXT','FORMAT_TEXT','SEND_MESSAGE','START_MONITOR',
+  'STOP_MONITOR','START_CROSS','STOP_CROSS','PAUSE_CROSS','RESUME_CROSS','SCHEDULE_TASK','CANCEL_TASK'];
+const CODE_GLOBALS=['client','SESSION_STRING','PHONE','events','errors','utils','types','asyncio','log','print','sleep','os','re','time'];
+
+function setMode(m){
+  SC.mode=m;
+  const auto = m==='automation';
+  $('btn-mode-safe').classList.toggle('on-safe', m==='safe');
+  $('btn-mode-raw').classList.toggle('on-raw', m==='raw');
+  $('btn-mode-auto').classList.toggle('on-safe', auto);
+  $('sc-rawwarn').classList.toggle('hidden', m!=='raw');
+  $('sc-autoinfo').classList.toggle('hidden', !auto);
+  // automation-only controls
+  $('btn-sc-validate').classList.toggle('hidden', !auto);
+  $('sc-tplbox').classList.toggle('hidden', !auto);
+  $('btn-sc-install').textContent = auto ? 'Run' : 'Install & Run';
+  $('btn-sc-stop').textContent = auto ? 'Stop' : 'Stop Script';
+  $('btn-sc-save').textContent = 'Save Template';
+  $('sc-globals-label').textContent = auto ? 'ALLOWED ACTIONS (tool registry)' : 'ALLOWED GLOBALS';
+  $('sc-globals').innerHTML = (auto?AUTO_GLOBALS:CODE_GLOBALS).map(c=>'<span class="gchip">'+esc(c)+'</span>').join('');
+  if(!auto){ $('sc-valid').classList.add('hidden'); $('sc-runcard').classList.add('hidden'); }
+  if(auto){ loadTemplates(); }
+}
+$('btn-mode-safe').onclick=()=>setMode('safe');
+$('btn-mode-raw').onclick=()=>{ setMode('raw'); toast('err','Raw mode: trusted code only'); };
+$('btn-mode-auto').onclick=()=>{ setMode('automation'); toast('info','Automation mode — approved actions only, account-bound'); };
+
+async function loadScript(accId){
+  SC.cur='';
+  if(!S.auth||!accId){ scButtons(); return; }
+  try{
+    const r=await api('/api/scripts/get',{method:'POST',auth:true,body:{account_id:accId}});
+    $('sc-name').value=r.name||'';
+    $('sc-code').value=r.code||'';
+    setMode(r.mode||'safe');
+    editorLines();
+    SC.running=!!r.running; scButtons();
+    if(Array.isArray($('sc-tpl').options) && r.template) { try{$('sc-tpl').value=r.template;}catch(e){} }
+    scFetchLogs(accId);
+    if(SC.running) scStartPoll(accId); else scStopPoll();
+  }catch(e){}
+}
+$('sc-account').onchange=()=>{ AU.editing=null; loadScript($('sc-account').value); if(SC.mode==='automation') loadTemplates(); };
+
+$('btn-sc-install').onclick=()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  const accId=$('sc-account').value;
+  if(!accId) return toast('err','Pehle ek managed account select karo');
+  if(SC.mode==='automation') return autoRun();
+  const btn=$('btn-sc-install');
+  if(btn.dataset.armed!=='1'){
+    btn.dataset.armed='1';
+    const old=btn.textContent; btn.textContent='Sure?';
+    setTimeout(()=>{ if(btn.dataset.armed==='1'){ delete btn.dataset.armed; btn.textContent='Install & Run'; } },3000);
+    return;
+  }
+  delete btn.dataset.armed; btn.disabled=true; btn.textContent='Installing…';
+  const body={account_id:accId,name:$('sc-name').value.trim(),code:$('sc-code').value,template:$('sc-tpl').value||'custom',mode:SC.mode};
+  api('/api/scripts/install',{method:'POST',auth:true,body}).then(r=>{
+    scErr(null);
+    SC.running=true; scButtons(); scFetchLogs(accId); scStartPoll(accId);
+    toast('ok','Script installed & running');
+  }).catch(e=>{ scErr(e.message); })
+   .finally(()=>{ btn.disabled=SC.running; btn.textContent='Install & Run'; });
+};
+function scErr(msg){ const el=$('sc-err'); if(!msg){el.classList.add('hidden');return;} el.textContent=msg; el.classList.remove('hidden'); }
+
+$('btn-sc-save').onclick=async()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(SC.mode==='automation') return autoSaveTemplate();
+  const label=$('sc-name').value.trim()||'User Script';
+  try{
+    await api('/api/scripts/templates/save',{method:'POST',auth:true,body:{label,code:$('sc-code').value}});
+    toast('ok','Template saved');
+    scLoadTemplates();
+  }catch(e){ scErr(e.message); }
+};
+
+$('btn-sc-stop').onclick=async()=>{
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(SC.mode==='automation') return autoStop();
+  const accId=$('sc-account').value;
+  const b=$('btn-sc-stop'); b.disabled=true; b.textContent='Stopping…';
+  try{
+    await api('/api/scripts/stop',{method:'POST',auth:true,body:{account_id:accId}});
+    SC.running=false; scButtons(); scStopPoll(); scFetchLogs(accId);
+    toast('ok','Script stopped');
+  }catch(e){ scErr(e.message); b.disabled=!SC.running; }
+  finally{ b.textContent='Stop Script'; }
+};
+
+$('btn-sc-clear').onclick=async()=>{
+  $('sc-out').innerHTML='';
+  const accId=$('sc-account').value;
+  if(S.auth&&accId){ try{ await api('/api/script/logs/'+encodeURIComponent(accId)+'/clear',{method:'POST',auth:true,body:{}});}catch(e){} }
+  scTerm([{ts:Date.now()/1000,level:'INFO',msg:'Terminal cleared'}], true);
+};
+$('btn-sc-pause').onclick=()=>{
+  SC.paused=!SC.paused;
+  $('btn-sc-pause').textContent=SC.paused?'Resume':'Pause';
+};
+
+scButtons();
+
+/* ---------------- AUTOMATION MODE — account-bound custom script runner ---------------- */
+const AU = {task:null, poll:null, templates:[], editing:null};
+
+function vRow(ok, label, detail){
+  return '<div class="vrow '+(ok?'okv':'nov')+'"><b>'+(ok?'✓':'✗')+'</b><span>'+esc(label)+
+    (detail?' — '+esc(detail):'')+'</span></div>';
+}
+function showValidation(res){
+  const box=$('sc-valid');
+  box.classList.remove('hidden');
+  const checks=res.checks||[];
+  const pass=!!res.ok;
+  box.innerHTML='<div class="vbox '+(pass?'pass':'fail')+'">'+
+    '<p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;color:#475569;margin-bottom:5px">VALIDATION RESULT</p>'+
+    (checks.length?checks.map(c=>vRow(c.ok,c.label,c.detail)).join(''):vRow(false,'Script structure valid',res.error||'unknown'))+
+    '<p style="font-family:var(--mono);font-size:9px;margin-top:6px;color:'+(pass?'#6ee7b7':'#fda4af')+'">'+
+    (pass?'READY TO RUN':'BLOCKED — fix the ✗ items; nothing was executed')+'</p></div>';
+}
+
+async function autoValidate(silent){
+  const accId=$('sc-account').value;
+  if(!accId){ toast('err','Select an account first'); return null; }
+  try{
+    const r=await api('/api/automation/validate',{method:'POST',auth:true,
+      body:{account_id:accId, code:$('sc-code').value}});
+    showValidation(r);
+    if(!silent) toast(r.ok?'ok':'err', r.ok?'Validation passed':'Validation failed');
+    return r;
+  }catch(e){ scErr(e.message); return null; }
+}
+$('btn-sc-validate').onclick=()=>autoValidate(false);
+
+async function autoSaveTemplate(){
+  const accId=$('sc-account').value;
+  if(!accId) return toast('err','Select an account — templates are account-bound');
+  const name=$('sc-name').value.trim();
+  if(!name) return toast('err','Template name daalo');
+  try{
+    const r=await api('/api/automation/templates/save',{method:'POST',auth:true,body:{
+      template_id:AU.editing, account_id:accId, name, code:$('sc-code').value}});
+    AU.editing=r.template_id;
+    scErr(null);
+    if(r.validation) showValidation(r.validation);
+    toast('ok','Template saved: '+name);
+    loadTemplates();
+  }catch(e){ scErr(e.message); toast('err','Save failed'); }
+}
+
+async function autoRun(){
+  const accId=$('sc-account').value;
+  const btn=$('btn-sc-install');
+  if(btn.dataset.armed!=='1'){
+    btn.dataset.armed='1'; btn.textContent='Sure?';
+    setTimeout(()=>{ if(btn.dataset.armed==='1'){ delete btn.dataset.armed; btn.textContent='Run'; } },3000);
+    return;
+  }
+  delete btn.dataset.armed; btn.textContent='Run'; btn.disabled=true;
+  scErr(null);
+  const v=await autoValidate(true);
+  if(!v || !v.ok){ btn.disabled=false; toast('err','Validation failed — not run'); return; }
+  try{
+    const body = AU.editing ? {template_id:AU.editing} : {account_id:accId, code:$('sc-code').value};
+    const r=await api('/api/automation/run',{method:'POST',auth:true,body});
+    AU.task=r.task_id;
+    toast('ok','Task '+r.task_id+' started');
+    autoPollStart();
+  }catch(e){ scErr(e.message); toast('err','Run failed'); }
+  finally{ btn.disabled=false; }
+}
+
+async function autoStop(){
+  if(!AU.task) return toast('err','No running task');
+  const b=$('btn-sc-stop'); b.disabled=true;
+  try{
+    await api('/api/automation/stop',{method:'POST',auth:true,body:{task_id:AU.task}});
+    toast('ok','Task stopped');
+    autoPoll();
+  }catch(e){ scErr(e.message); }
+  finally{ b.disabled=false; }
+}
+
+function renderRunCard(t){
+  const card=$('sc-runcard');
+  if(!t){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  card.className='runcard'+(t.status==='COMPLETED'?' done':(t.status==='FAILED'?' fail':''));
+  const col = t.status==='RUNNING' ? '#67e8f9' : t.status==='COMPLETED' ? '#6ee7b7'
+            : t.status==='FAILED' ? '#fda4af' : '#fcd34d';
+  card.innerHTML='<p style="font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;color:#475569;margin-bottom:5px">CUSTOM SCRIPT</p>'+
+    '<div class="kv2"><span>Template</span><b>'+esc(t.name||'—')+'</b></div>'+
+    '<div class="kv2"><span>Account</span><b>@'+esc(t.account||'—')+'</b></div>'+
+    '<div class="kv2"><span>Task</span><b>'+esc(t.task_id)+'</b></div>'+
+    '<div class="kv2"><span>Status</span><b style="color:'+col+'">'+esc(t.status)+'</b></div>'+
+    '<div class="kv2"><span>Progress</span><b>'+(t.progress||0)+'%</b></div>'+
+    (t.reason?'<div class="kv2"><span>Reason</span><b style="color:#fda4af">'+esc(t.reason)+'</b></div>':'')+
+    '<div class="pbar"><i style="width:'+(t.progress||0)+'%"></i></div>';
+  $('btn-sc-stop').disabled = !(t.status==='RUNNING');
+}
+
+async function autoPoll(){
+  if(!AU.task) return;
+  try{
+    const r=await api('/api/automation/logs?task_id='+encodeURIComponent(AU.task),{auth:true});
+    renderRunCard(r.task);
+    scTerm((r.logs||[]).map(l=>({ts:l.ts,level:l.level,msg:l.msg})), true);
+    if(r.task && r.task.status!=='RUNNING'){ autoPollStop(); loadTemplates(); }
+  }catch(e){}
+}
+function autoPollStart(){ autoPollStop(); autoPoll(); AU.poll=setInterval(()=>{ if(!document.hidden) autoPoll(); },2000); }
+function autoPollStop(){ if(AU.poll){ clearInterval(AU.poll); AU.poll=null; } }
+
+async function loadTemplates(){
+  if(!S.auth) return;
+  try{
+    const accId=$('sc-account').value;
+    const r=await api('/api/automation/templates'+(accId?('?account_id='+encodeURIComponent(accId)):''),{auth:true});
+    AU.templates=r.templates||[];
+    const el=$('tpl-list');
+    if(!AU.templates.length){
+      el.innerHTML='<p class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:9px">No templates for this account — write actions above and SAVE TEMPLATE.</p>';
+      return;
+    }
+    el.innerHTML=AU.templates.map(t=>{
+      const run=!!t.running_task;
+      return '<div class="tplrow"><div class="t1">'+
+        '<span class="dot '+(run?'ok':'dim')+'"></span><span class="nm">'+esc(t.name)+'</span>'+
+        '<span class="badge '+(t.enabled?'act':'idle')+'">'+(t.enabled?'ENABLED':'DISABLED')+'</span>'+
+        (run?'<span class="run-badge">'+esc(t.running_task)+'</span>':'')+'</div>'+
+        '<p class="meta2">@'+esc(t.account||'?')+' · '+esc(t.template_id)+' · last: '+
+        (t.last_run?new Date(t.last_run*1000).toLocaleString('en-GB',{timeZone:'Asia/Kathmandu'}):'never')+
+        (t.last_result?(' · '+esc(t.last_result)):'')+'</p>'+
+        '<div class="tplops">'+
+        '<button class="mini" data-trun="'+esc(t.template_id)+'">Run</button>'+
+        '<button class="mini" data-tstop="'+esc(t.template_id)+'">Stop</button>'+
+        '<button class="mini" data-tedit="'+esc(t.template_id)+'">Edit</button>'+
+        '<button class="mini" data-tdup="'+esc(t.template_id)+'">Duplicate</button>'+
+        '<button class="mini" data-ttog="'+esc(t.template_id)+'">'+(t.enabled?'Disable':'Enable')+'</button>'+
+        '<button class="mini" data-tlogs="'+esc(t.template_id)+'">Logs</button>'+
+        '<button class="mini red" data-tdel="'+esc(t.template_id)+'">Delete</button>'+
+        '</div></div>';
+    }).join('');
+    el.querySelectorAll('[data-trun]').forEach(b=>b.onclick=()=>tplRun(b.dataset.trun));
+    el.querySelectorAll('[data-tstop]').forEach(b=>b.onclick=()=>tplStop(b.dataset.tstop));
+    el.querySelectorAll('[data-tedit]').forEach(b=>b.onclick=()=>tplEdit(b.dataset.tedit));
+    el.querySelectorAll('[data-tdup]').forEach(b=>b.onclick=()=>tplDup(b.dataset.tdup));
+    el.querySelectorAll('[data-ttog]').forEach(b=>b.onclick=()=>tplToggle(b.dataset.ttog));
+    el.querySelectorAll('[data-tlogs]').forEach(b=>b.onclick=()=>tplLogs(b.dataset.tlogs));
+    el.querySelectorAll('[data-tdel]').forEach(b=>twoStep(b,'Delete',()=>tplDelete(b.dataset.tdel)));
+  }catch(e){}
+}
+async function tplRun(id){
+  try{ const r=await api('/api/automation/run',{method:'POST',auth:true,body:{template_id:id}});
+    AU.task=r.task_id; toast('ok','Task '+r.task_id+' started'); autoPollStart(); loadTemplates();
+  }catch(e){ toast('err',e.message); scErr(e.message); }
+}
+async function tplStop(id){
+  try{ await api('/api/automation/stop',{method:'POST',auth:true,body:{template_id:id}});
+    toast('ok','Stopped'); autoPoll(); loadTemplates();
+  }catch(e){ toast('err',e.message); }
+}
+function tplEdit(id){
+  const t=AU.templates.find(x=>x.template_id===id); if(!t) return;
+  if($('sc-code').value.trim() && !confirm('Replace current code with "'+t.name+'"?')) return;
+  AU.editing=id; $('sc-name').value=t.name; $('sc-code').value=t.code||''; editorLines();
+  toast('info','Editing '+t.name);
+}
+async function tplDup(id){
+  try{ await api('/api/automation/templates/duplicate',{method:'POST',auth:true,body:{template_id:id}});
+    toast('ok','Duplicated'); loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplToggle(id){
+  const t=AU.templates.find(x=>x.template_id===id); if(!t) return;
+  try{ await api('/api/automation/templates/toggle',{method:'POST',auth:true,body:{template_id:id,enabled:!t.enabled}});
+    loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplDelete(id){
+  try{ await api('/api/automation/templates/delete',{method:'POST',auth:true,body:{template_id:id}});
+    if(AU.editing===id) AU.editing=null;
+    toast('info','Deleted'); loadTemplates(); }catch(e){ toast('err',e.message); }
+}
+async function tplLogs(id){
+  try{
+    const r=await api('/api/automation/logs?template_id='+encodeURIComponent(id),{auth:true});
+    AU.task=r.task_id||null; renderRunCard(r.task);
+    scTerm((r.logs||[]).map(l=>({ts:l.ts,level:l.level,msg:l.msg})), true);
+    if(!(r.logs||[]).length) scTerm([{ts:Date.now()/1000,level:'INFO',msg:'No logs yet for this template'}],true);
+  }catch(e){ toast('err',e.message); }
+}
+$('btn-tpl-refresh').onclick=loadTemplates;
+$('btn-tpl-heal').onclick=async()=>{
+  try{ const r=await api('/api/automation/heal',{method:'POST',auth:true,body:{}});
+    scTerm([{ts:Date.now()/1000,level:'OK',msg:'HEAL ▸ '+((r.healed||[]).join(' | ')||'nothing to recover')}],true);
+    toast('ok','Healing done (runtime only)'); loadTemplates();
+  }catch(e){ toast('err',e.message); }
+};
+
+/* per-account config (main channel / source / destination) */
+async function loadAccountCfg(){
+  const id=$('ac-account').value;
+  if(!S.auth||!id) return;
+  try{
+    const r=await api('/api/account/config?account_id='+encodeURIComponent(id),{auth:true});
+    const c=r.config||{};
+    $('ac-main').value=c.main_channel||''; $('ac-src').value=c.source||''; $('ac-dst').value=c.destination||'';
+  }catch(e){}
+}
+$('ac-account').onchange=loadAccountCfg;
+$('btn-ac-save').onclick=async()=>{
+  const id=$('ac-account').value;
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  if(!id) return toast('err','Select an account');
+  try{
+    await api('/api/account/config',{method:'POST',auth:true,body:{account_id:id,
+      main_channel:$('ac-main').value.trim(), source:$('ac-src').value.trim(),
+      destination:$('ac-dst').value.trim()}});
+    toast('ok','Account config saved');
+  }catch(e){ toast('err',e.message); }
+};
+
+/* ---------------- AGENT OPERATIONS CONTROL CENTER ---------------- */
+const OPS = {data:null, poll:null, mains:[]};
+
+function opsCard(label, val, sub, cls){
+  return '<div class="ops-card '+(cls||'')+'"><p class="l">'+esc(label)+'</p>'+
+         '<p class="v">'+esc(val)+'</p><p class="s">'+esc(sub||'')+'</p></div>';
+}
+function renderOps(d){
+  OPS.data=d;
+  const eng=d.engine||{}, br=d.brain||{};
+  const conn=(d.accounts||[]).filter(a=>a.connected).length;
+  $('ops-cards').innerHTML=
+    opsCard('JARVIS', d.jarvis||'—', 'agent online', 'ok')+
+    opsCard('Accounts', conn+'/'+(d.accounts||[]).length, 'connected', conn?'ok':'warn')+
+    opsCard('Active Tasks', d.active_tasks||0, 'monitoring / running', (d.active_tasks?'ok':''))+
+    opsCard('Cross Engine', (eng.status||'—').toUpperCase(), 'queue '+(eng.queue||0)+' · sent '+(eng.processed||0), eng.status==='running'?'ok':'')+
+    opsCard('FloodWait', (eng.flood_wait_in? eng.flood_wait_in+'s':'none'), 'exact delay honoured', eng.flood_wait_in?'warn':'')+
+    opsCard('Brain', br.memories||0, (br.workflows||0)+' workflows · '+(br.channels||0)+' channels');
+  const tasks=(d.tasks||[]).slice().reverse();
+  $('ops-tasks').innerHTML = tasks.length ? tasks.slice(0,8).map(t=>{
+    const st=t.stats||{};
+    const exp=t.expires_in!=null?(' · '+Math.round(t.expires_in/60)+'m left'):'';
+    return '<div class="trow"><span class="st-pill st-'+esc(t.status)+'">'+esc(t.status)+'</span>'+
+      '<div style="min-width:0;flex:1"><p class="ti">'+esc(t.task_id)+' · '+esc(t.goal)+'</p>'+
+      '<p class="tm">'+esc(t.summary||'')+' · seen '+(st.seen||0)+' · acted '+(st.acted||0)+
+      ' · err '+(st.errors||0)+exp+(t.last_error?(' · '+esc(t.last_error)):'')+'</p></div>'+
+      (['MONITORING','RUNNING','WAITING','PAUSED','PLANNING'].includes(t.status)
+        ? '<button class="mini red" data-stoptask="'+esc(t.task_id)+'">Stop</button>':'')+'</div>';
+  }).join('') : '<p class="note" style="border:1px dashed rgba(255,255,255,.1);border-radius:3px;padding:9px">No background work. Give JARVIS a goal above.</p>';
+  $('ops-tasks').querySelectorAll('[data-stoptask]').forEach(b=>b.onclick=()=>opsStop(b.dataset.stoptask));
+
+  const sel=$('ops-acct'); const cur=sel.value;
+  sel.innerHTML=(d.accounts||[]).length
+    ? (d.accounts||[]).map(a=>'<option value="'+esc(a.id)+'">'+esc(a.label||a.id)+' (@'+esc(a.username||'?')+')</option>').join('')
+    : '<option value="">— no account —</option>';
+  if(cur) sel.value=cur;
+  if(!OPS.mains.length || cur!==sel.value) opsLoadMains();
+
+  const caps=(br.capability_requests||[]);
+  $('ops-brain').innerHTML =
+    (br.recent||[]).slice(0,6).map(m=>'<p class="mem-line"><b>'+esc(m.kind)+'</b> '+esc(m.text)+'</p>').join('')
+    + (caps.length?('<p class="mem-line" style="color:#fcd34d;margin-top:5px">CAPABILITY REQUESTS: '+caps.length+'</p>'
+        + caps.slice(0,3).map(c=>'<p class="mem-line" style="color:#fcd34d">▸ '+esc(c.text)+'</p>').join('')):'')
+    + ((br.failures||[]).length?('<p class="mem-line" style="color:#fda4af;margin-top:5px">recent failures: '+
+        esc((br.failures||[]).slice(0,2).map(f=>f.goal).join(', '))+'</p>'):'')
+    || '<p class="note">Memory empty — JARVIS will learn as you give goals.</p>';
+  $('ops-clock').textContent=new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Kathmandu',hour12:false})+' NPT';
+}
+function opsLoadMains(){
+  const id=$('ops-acct').value;
+  const a=((OPS.data||{}).accounts||[]).find(x=>x.id===id);
+  OPS.mains=(a&&a.main_channels||[]).slice();
+  renderMains();
+}
+function renderMains(){
+  const box=$('ops-mains');
+  box.innerHTML=(OPS.mains.length?OPS.mains:['']).map((c,i)=>
+    '<div class="mainch"><input value="'+esc(c)+'" data-mi="'+i+'" placeholder="1716302260"/>'+
+    '<button class="mini red" data-mdel="'+i+'">✕</button></div>').join('');
+  box.querySelectorAll('[data-mi]').forEach(inp=>inp.oninput=()=>{ OPS.mains[+inp.dataset.mi]=inp.value.trim(); });
+  box.querySelectorAll('[data-mdel]').forEach(b=>b.onclick=()=>{ OPS.mains.splice(+b.dataset.mdel,1); renderMains(); });
+}
+$('btn-main-add').onclick=()=>{ OPS.mains.push(''); renderMains(); };
+$('ops-acct').onchange=opsLoadMains;
+$('btn-main-save').onclick=async()=>{
+  const id=$('ops-acct').value;
+  if(!id) return toast('err','Select an account');
+  try{
+    await api('/api/account/config',{method:'POST',auth:true,
+      body:{account_id:id, main_channels:OPS.mains.filter(Boolean)}});
+    toast('ok','Main channels saved'); opsRefresh();
+  }catch(e){ toast('err',e.message); }
+};
+async function opsStop(tid){
+  try{ await api('/api/agent/task/stop',{method:'POST',auth:true,body:{task_id:tid}});
+    toast('ok','Stopped '+tid); opsRefresh(); }catch(e){ toast('err',e.message); }
+}
+$('btn-ops-stopall').onclick=()=>twoStepRun($('btn-ops-stopall'),'Stop All',async()=>{
+  try{ const r=await api('/api/agent/task/stop',{method:'POST',auth:true,body:{task_id:'all'}});
+    toast('ok',(r.stopped||0)+' task(s) stopped'); opsRefresh(); }catch(e){ toast('err',e.message); }
+});
+function twoStepRun(btn,label,fn){
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent='Sure?';
+    setTimeout(()=>{ if(btn.dataset.armed==='1'){ delete btn.dataset.armed; btn.textContent=label; } },3000); return; }
+  delete btn.dataset.armed; btn.textContent=label; fn();
+}
+$('btn-ops-goal').onclick=()=>opsGoal();
+$('ops-goal').addEventListener('keydown',e=>{ if(e.key==='Enter') opsGoal(); });
+async function opsGoal(){
+  const g=$('ops-goal').value.trim();
+  if(!g) return;
+  if(!S.auth) return toast('err','Unlock JARVIS access first');
+  $('ops-goal').value='';
+  term('user', g);
+  try{
+    const r=await api('/api/agent/goal',{method:'POST',auth:true,body:{goal:g}});
+    await termLines(r.ok?'jarvis':'err', r.lines||[]);
+    opsRefresh(); pollStatus();
+  }catch(e){ term('err','ERROR ▸ '+e.message); }
+}
+async function opsRefresh(){
+  if(!S.auth||!S.up) return;
+  try{ renderOps(await api('/api/agent/overview',{auth:true})); $('ops-err').classList.add('hidden'); }
+  catch(e){ if(e.status===401) setAuth(false); }
+}
+$('btn-ops-refresh').onclick=opsRefresh;
+setInterval(()=>{ if(S.auth&&S.up&&!document.hidden) opsRefresh(); }, 5000);
+
+/* greeting + first sync */
+term('sys', 'DEVIL JARVIS CORE v3.1 — Telegram AI Control System');
+term('sys', 'Single-file deployment ▸ web UI + API served by python main.py');
+term('sys', 'Status is read live from the backend every 4s — nothing hard-coded.');
+term('sys', 'Type "help" — JARVIS understands English, Hindi and Hinglish.');
+pollStatus();
+if (S.token) {
+  api('/api/jarvis/auth', {method: 'POST', body: {token: S.token}})
+    .then(() => setAuth(true))
+    .catch(() => { sessionStorage.removeItem('jv_tok'); S.token = ''; setAuth(false); });
+} else setAuth(false);
 </script>
 </body>
 </html>
